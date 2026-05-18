@@ -38,6 +38,14 @@ def get_mapping_path() -> Path | None:
     return Path(val) if val else None
 
 
+def get_hunt_timeout() -> int:
+    """Seconds before giving up on a chainsaw hunt subprocess. Override with CHAINSAW_TIMEOUT."""
+    try:
+        return int(os.environ.get("CHAINSAW_TIMEOUT", "1800"))
+    except ValueError:
+        return 1800
+
+
 def get_batch_size() -> int:
     try:
         return int(os.environ.get("ENRICHMENT_BATCH_SIZE", "20"))

@@ -8,7 +8,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent, Tool
 
-from .chainsaw import ChainsawError, run_hunt
+from .chainsaw import ChainsawError, run_hunt_async
 from .evidence import EvidenceError, PreparedEvidence, prepare_evidence
 from .report import format_report
 
@@ -152,7 +152,7 @@ async def _chainsaw_hunt(args: dict) -> CallToolResult:
     extra = args.get("extra_args") or []
 
     try:
-        hits = run_hunt(state.evidence.evtx_dir, rules_path=rules, sigma_path=sigma, mapping_path=mapping, extra_args=extra)
+        hits = await run_hunt_async(state.evidence.evtx_dir, rules_path=rules, sigma_path=sigma, mapping_path=mapping, extra_args=extra)
     except ChainsawError as e:
         return _error(str(e))
 
