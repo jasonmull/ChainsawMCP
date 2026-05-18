@@ -91,8 +91,8 @@ Add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "CHainsawMCP": {
-      "command": "CHainsawMCP",
+    "ChainsawMCP": {
+      "command": "ChainsawMCP",
       "env": {
         "OLLAMA_BASE_URL": "http://your-ollama-host:11434",
         "CHAINSAW_BIN": "/usr/local/bin/chainsaw",
@@ -107,7 +107,7 @@ Add to `claude_desktop_config.json`:
 ### Claude Code CLI
 
 ```bash
-claude mcp add CHainsawMCP CHainsawMCP \
+claude mcp add ChainsawMCP ChainsawMCP \
   -e OLLAMA_BASE_URL=http://your-ollama-host:11434 \
   -e CHAINSAW_BIN=/usr/local/bin/chainsaw \
   -e CHAINSAW_RULES=/opt/chainsaw/rules \
@@ -220,7 +220,7 @@ Tests mock all subprocess and LLM calls — no Chainsaw binary or Ollama instanc
 ## Project Structure
 
 ```
-CHainsawMCP/
+ChainsawMCP/
 ├── pyproject.toml
 ├── src/
 │   └── chainsawmcp/
