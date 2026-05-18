@@ -1,15 +1,29 @@
 """Subprocess wrapper for Chainsaw hunt."""
 
+import asyncio
 import json
 import subprocess
 from pathlib import Path
 from typing import Any
 
-from .config import get_chainsaw_binary, get_mapping_path, get_rules_path, get_sigma_path
+from .config import get_chainsaw_binary, get_hunt_timeout, get_mapping_path, get_rules_path, get_sigma_path
 
 
 class ChainsawError(Exception):
     pass
+
+
+async def run_hunt_async(
+    evtx_dir: Path,
+    rules_path: Path | None = None,
+    sigma_path: Path | None = None,
+    mapping_path: Path | None = None,
+    extra_args: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Run `chainsaw hunt` without blocking the asyncio event loop."""
+    return await asyncio.to_thread(
+        run_hunt, evtx_dir, rules_path, sigma_path, mapping_path, extra_args
+    )
 
 
 def run_hunt(
@@ -19,7 +33,7 @@ def run_hunt(
     mapping_path: Path | None = None,
     extra_args: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Run `chainsaw hunt` and return parsed JSON hits."""
+    """Run `chainsaw hunt` and return parsed JSON hits (blocking)."""
     rules = rules_path or get_rules_path()
     sigma = sigma_path or get_sigma_path()
     mapping = mapping_path or get_mapping_path()
@@ -32,13 +46,14 @@ def run_hunt(
         )
 
     cmd = _build_command(evtx_dir, rules, sigma, mapping, extra_args or [])
+    timeout = get_hunt_timeout()
 
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=timeout,
         )
     except FileNotFoundError:
         binary = get_chainsaw_binary()
@@ -47,7 +62,7 @@ def run_hunt(
             "Ensure it is on PATH or set CHAINSAW_BIN env var."
         )
     except subprocess.TimeoutExpired:
-        raise ChainsawError("Chainsaw timed out after 600 seconds.")
+        raise ChainsawError(f"Chainsaw timed out after {timeout} seconds.")
 
     if result.returncode != 0:
         raise ChainsawError(
@@ -65,7 +80,7 @@ def _build_command(
     extra_args: list[str],
 ) -> list[str]:
     binary = get_chainsaw_binary()
-    cmd = [str(binary), "hunt", str(evtx_dir), "--json"]
+    cmd = [str(binary), "hunt", str(evtx_dir), "--json", "--no-progress"]
 
     if rules_path:
         cmd += ["--rule", str(rules_path)]
