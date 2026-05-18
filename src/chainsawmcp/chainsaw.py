@@ -68,7 +68,7 @@ def _build_command(
     cmd = [str(binary), "hunt", str(evtx_dir), "--json"]
 
     if rules_path:
-        cmd += ["--rules", str(rules_path)]
+        cmd += ["--rule", str(rules_path)]
     if sigma_path:
         cmd += ["--sigma", str(sigma_path)]
     if mapping_path:
