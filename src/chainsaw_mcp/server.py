@@ -14,7 +14,7 @@ from .enrichment import EnrichmentError, EnrichmentResult, enrich_hits
 from .evidence import EvidenceError, PreparedEvidence, prepare_evidence
 from .report import format_report
 
-app = Server("chainsaw-mcp")
+app = Server("CHainsawMCP")
 
 
 class _SessionState:

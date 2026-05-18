@@ -70,7 +70,7 @@ All file paths and subprocess calls must handle both Windows and Linux.
 
 ## Project Structure (target)
 ```
-chainsaw-mcp/
+CHainsawMCP/
 ├── CLAUDE.md
 ├── README.md
 ├── pyproject.toml

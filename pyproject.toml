@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "chainsaw-mcp"
+name = "CHainsawMCP"
 version = "0.1.0"
 description = "MCP server wrapping Chainsaw for Windows Event Log analysis with LLM enrichment"
 requires-python = ">=3.11"
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-chainsaw-mcp = "chainsaw_mcp.server:main"
+CHainsawMCP = "chainsaw_mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/chainsaw_mcp"]
