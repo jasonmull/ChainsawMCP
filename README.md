@@ -223,7 +223,7 @@ Tests mock all subprocess and LLM calls — no Chainsaw binary or Ollama instanc
 CHainsawMCP/
 ├── pyproject.toml
 ├── src/
-│   └── chainsaw_mcp/
+│   └── chainsawmcp/
 │       ├── server.py       # MCP server and tool dispatch
 │       ├── evidence.py     # E01 mounting and EVTX staging
 │       ├── chainsaw.py     # Chainsaw subprocess wrapper

@@ -75,7 +75,7 @@ CHainsawMCP/
 ├── README.md
 ├── pyproject.toml
 ├── src/
-│   └── chainsaw_mcp/
+│   └── chainsawmcp/
 │       ├── __init__.py
 │       ├── server.py        # MCP server entry point
 │       ├── evidence.py      # E01 mounting + EVTX staging (prepare_evidence)

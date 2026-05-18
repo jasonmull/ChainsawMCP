@@ -68,7 +68,7 @@ def _prepare_e01_linux(first_segment: Path) -> PreparedEvidence:
     _require_tool("ewfmount", "ewf-tools package")
     _require_tool("ntfs-3g", "ntfs-3g package")
 
-    tmp = Path(tempfile.mkdtemp(prefix="chainsaw_mcp_"))
+    tmp = Path(tempfile.mkdtemp(prefix="chainsawmcp_"))
     ewf_mount = tmp / "ewf"
     ntfs_mount = tmp / "ntfs"
     evtx_stage = tmp / "evtx"
@@ -95,7 +95,7 @@ def _prepare_e01_windows(first_segment: Path) -> PreparedEvidence:
     if not aim:
         raise EvidenceError("Arsenal Image Mounter (aim_cli.exe) not found. Add it to PATH or set AIM_CLI env var.")
 
-    tmp = Path(tempfile.mkdtemp(prefix="chainsaw_mcp_"))
+    tmp = Path(tempfile.mkdtemp(prefix="chainsawmcp_"))
     evtx_stage = tmp / "evtx"
     evtx_stage.mkdir()
 

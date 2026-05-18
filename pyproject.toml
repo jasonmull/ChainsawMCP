@@ -14,10 +14,10 @@ dependencies = [
 ]
 
 [project.scripts]
-CHainsawMCP = "chainsaw_mcp.server:main"
+CHainsawMCP = "chainsawmcp.server:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/chainsaw_mcp"]
+packages = ["src/chainsawmcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from chainsaw_mcp.chainsaw import ChainsawError, _parse_output, run_hunt
-from chainsaw_mcp.config import get_batch_size, get_ollama_base_url, get_ollama_model
-from chainsaw_mcp.enrichment import (
+from chainsawmcp.chainsaw import ChainsawError, _parse_output, run_hunt
+from chainsawmcp.config import get_batch_size, get_ollama_base_url, get_ollama_model
+from chainsawmcp.enrichment import (
     EnrichmentError,
     _chunks,
     _confidence_tier,
@@ -17,8 +17,8 @@ from chainsaw_mcp.enrichment import (
     _rule_key,
     enrich_hits,
 )
-from chainsaw_mcp.evidence import EvidenceError, PreparedEvidence, _prepare_evtx_dir
-from chainsaw_mcp.report import format_report
+from chainsawmcp.evidence import EvidenceError, PreparedEvidence, _prepare_evtx_dir
+from chainsawmcp.report import format_report
 
 
 # ---------------------------------------------------------------------------
@@ -97,13 +97,13 @@ def test_prepare_evtx_dir_empty(tmp_path):
 
 
 def test_prepare_evidence_nonexistent():
-    from chainsaw_mcp.evidence import prepare_evidence
+    from chainsawmcp.evidence import prepare_evidence
     with pytest.raises(EvidenceError, match="does not exist"):
         prepare_evidence("/nonexistent/path/evidence")
 
 
 def test_prepare_evidence_unknown_extension(tmp_path):
-    from chainsaw_mcp.evidence import prepare_evidence
+    from chainsawmcp.evidence import prepare_evidence
     f = tmp_path / "image.vmdk"
     f.write_bytes(b"")
     with pytest.raises(EvidenceError, match="Unrecognised"):
@@ -151,7 +151,7 @@ def test_chunks():
 @pytest.mark.asyncio
 async def test_enrich_hits_low_severity_no_llm():
     hits = [{"name": "Noisy Rule", "level": "low", "timestamp": "t"}]
-    with patch("chainsaw_mcp.enrichment._chat", new_callable=AsyncMock) as mock_chat:
+    with patch("chainsawmcp.enrichment._chat", new_callable=AsyncMock) as mock_chat:
         mock_chat.return_value = "narrative"
         result = await enrich_hits(hits)
     # LOW severity should be templated — LLM should not be called for the batch
@@ -167,7 +167,7 @@ async def test_enrich_hits_medium_calls_llm():
         {"name": "Mimikatz", "level": "high", "timestamp": f"t{i}"}
         for i in range(3)
     ]
-    with patch("chainsaw_mcp.enrichment._chat", new_callable=AsyncMock) as mock_chat:
+    with patch("chainsawmcp.enrichment._chat", new_callable=AsyncMock) as mock_chat:
         mock_chat.return_value = "LLM narrative"
         result = await enrich_hits(hits, batch_size=20)
 
@@ -188,7 +188,7 @@ async def test_enrich_empty_hits():
 # ---------------------------------------------------------------------------
 
 def test_format_report_structure():
-    from chainsaw_mcp.enrichment import EnrichedBatch, EnrichmentResult
+    from chainsawmcp.enrichment import EnrichedBatch, EnrichmentResult
 
     batches = [
         EnrichedBatch(
@@ -209,7 +209,7 @@ def test_format_report_structure():
 
 
 def test_format_report_empty():
-    from chainsaw_mcp.enrichment import EnrichmentResult
+    from chainsawmcp.enrichment import EnrichmentResult
     result = EnrichmentResult(batches=[], rollup="No findings.")
     report = format_report(result, evtx_path="/empty", total_hits=0)
     assert "No findings." in report
@@ -220,7 +220,7 @@ def test_format_report_empty():
 # ---------------------------------------------------------------------------
 
 def test_run_hunt_binary_not_found(tmp_path):
-    with patch("chainsaw_mcp.chainsaw.subprocess.run", side_effect=FileNotFoundError()):
+    with patch("chainsawmcp.chainsaw.subprocess.run", side_effect=FileNotFoundError()):
         with pytest.raises(ChainsawError, match="not found"):
             run_hunt(tmp_path)
 
@@ -229,7 +229,7 @@ def test_run_hunt_nonzero_exit(tmp_path):
     mock_result = MagicMock()
     mock_result.returncode = 1
     mock_result.stderr = "some error"
-    with patch("chainsaw_mcp.chainsaw.subprocess.run", return_value=mock_result):
+    with patch("chainsawmcp.chainsaw.subprocess.run", return_value=mock_result):
         with pytest.raises(ChainsawError, match="exited with code 1"):
             run_hunt(tmp_path)
 
@@ -239,6 +239,6 @@ def test_run_hunt_success(tmp_path):
     mock_result = MagicMock()
     mock_result.returncode = 0
     mock_result.stdout = json.dumps(hits)
-    with patch("chainsaw_mcp.chainsaw.subprocess.run", return_value=mock_result):
+    with patch("chainsawmcp.chainsaw.subprocess.run", return_value=mock_result):
         result = run_hunt(tmp_path)
     assert result == hits
