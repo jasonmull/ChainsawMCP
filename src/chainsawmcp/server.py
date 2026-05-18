@@ -9,8 +9,6 @@ from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent, Tool
 
 from .chainsaw import ChainsawError, run_hunt
-from .config import get_batch_size
-from .enrichment import EnrichmentError, EnrichmentResult, enrich_hits
 from .evidence import EvidenceError, PreparedEvidence, prepare_evidence
 from .report import format_report
 
@@ -22,7 +20,6 @@ class _SessionState:
     evidence: PreparedEvidence | None = None
     hits: list[dict] = []
     evidence_path: str = ""
-    enrichment: EnrichmentResult | None = None
 
 
 state = _SessionState()
@@ -56,7 +53,7 @@ async def list_tools() -> list[Tool]:
             name="chainsaw_hunt",
             description=(
                 "Run Chainsaw hunt against staged EVTXs. "
-                "Returns a summary of detections. Does NOT require Ollama."
+                "Returns all detections grouped by rule for the client to analyse."
             ),
             inputSchema={
                 "type": "object",
@@ -79,30 +76,10 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="chainsaw_enrich",
-            description=(
-                "Send Chainsaw hits to the local LLM (Ollama) for narrative enrichment. "
-                "Batches hits by rule/tactic, enriches each batch, then synthesises a roll-up. "
-                "Requires Ollama at OLLAMA_BASE_URL."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "batch_size": {
-                        "type": "integer",
-                        "description": f"Hits per LLM batch (default: {get_batch_size()}).",
-                        "minimum": 1,
-                        "maximum": 100,
-                    }
-                },
-                "required": [],
-            },
-        ),
-        Tool(
             name="chainsaw_report",
             description=(
-                "Format enriched results into a structured analyst report. "
-                "Call chainsaw_enrich first."
+                "Format hunt results into a structured analyst report. "
+                "Call chainsaw_hunt first."
             ),
             inputSchema={
                 "type": "object",
@@ -122,7 +99,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
     handlers = {
         "prepare_evidence": _prepare_evidence,
         "chainsaw_hunt": _chainsaw_hunt,
-        "chainsaw_enrich": _chainsaw_enrich,
         "chainsaw_report": _chainsaw_report,
     }
     handler = handlers.get(name)
@@ -151,7 +127,6 @@ async def _prepare_evidence(args: dict) -> CallToolResult:
     state.evidence = ev
     state.hits = []
     state.evidence_path = path
-    state.enrichment = None
 
     evtx_count = len(list(ev.evtx_dir.rglob("*.evtx")))
     return _ok(
@@ -177,56 +152,20 @@ async def _chainsaw_hunt(args: dict) -> CallToolResult:
         return _error(str(e))
 
     state.hits = hits
-    state.enrichment = None
 
     summary = _hits_summary(hits)
     return _ok(
         f"Hunt complete — {len(hits)} hit(s) found.\n\n"
         f"{summary}\n\n"
-        "Next step: call chainsaw_enrich (requires Ollama) or chainsaw_report for a raw report."
-    )
-
-
-async def _chainsaw_enrich(args: dict) -> CallToolResult:
-    if not state.evidence:
-        return _error("No evidence staged. Call prepare_evidence first.")
-    if not state.hits:
-        return _ok("No hits to enrich — Chainsaw found 0 detections.")
-
-    batch_size = int(args.get("batch_size") or get_batch_size())
-
-    try:
-        result = await enrich_hits(state.hits, batch_size=batch_size)
-    except EnrichmentError as e:
-        return _error(str(e))
-
-    state.enrichment = result
-
-    confidence_counts = {
-        "HIGH": sum(1 for b in result.batches if b.confidence == "HIGH"),
-        "MEDIUM": sum(1 for b in result.batches if b.confidence == "MEDIUM"),
-        "LOW": sum(1 for b in result.batches if b.confidence == "LOW"),
-    }
-
-    return _ok(
-        f"Enrichment complete — {len(result.batches)} batch(es) analysed.\n"
-        f"  HIGH: {confidence_counts['HIGH']}  MEDIUM: {confidence_counts['MEDIUM']}  LOW: {confidence_counts['LOW']}\n\n"
-        "ROLL-UP SUMMARY\n"
-        "---------------\n"
-        f"{result.rollup}\n\n"
-        "Next step: call chainsaw_report for the full formatted report."
+        "Call chainsaw_report for a formatted report."
     )
 
 
 async def _chainsaw_report(_args: dict) -> CallToolResult:
-    if state.enrichment is None:
-        return _error("No enrichment data. Call chainsaw_enrich first.")
+    if not state.evidence:
+        return _error("No evidence staged. Call prepare_evidence first.")
 
-    report = format_report(
-        state.enrichment,
-        evtx_path=state.evidence_path,
-        total_hits=len(state.hits),
-    )
+    report = format_report(state.hits, evtx_path=state.evidence_path)
     return _ok(report)
 
 

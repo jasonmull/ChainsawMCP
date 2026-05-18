@@ -1,72 +1,67 @@
-"""Format enriched results into a structured analyst report."""
+"""Format Chainsaw hunt results into a structured analyst report."""
 
 from datetime import datetime, timezone
 from typing import Any
 
-from .enrichment import EnrichmentResult
 
-
-def format_report(
-    result: EnrichmentResult,
-    evtx_path: str,
-    total_hits: int,
-    metadata: dict[str, Any] | None = None,
-) -> str:
+def format_report(hits: list[dict[str, Any]], evtx_path: str) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    lines: list[str] = []
+    grouped = _group_by_rule(hits)
 
+    lines: list[str] = []
     lines += [
         "=" * 72,
-        "  CHAINSAW MCP — ANALYST REPORT",
+        "  ChainsawMCP — ANALYST REPORT",
         "=" * 72,
         f"Generated : {now}",
         f"Evidence  : {evtx_path}",
-        f"Total hits: {total_hits}",
-    ]
-
-    if metadata:
-        for k, v in metadata.items():
-            lines.append(f"{k:<10}: {v}")
-
-    lines += ["", "-" * 72, "EXECUTIVE SUMMARY", "-" * 72, result.rollup, ""]
-
-    # Confidence breakdown
-    high = [b for b in result.batches if b.confidence == "HIGH"]
-    med  = [b for b in result.batches if b.confidence == "MEDIUM"]
-    low  = [b for b in result.batches if b.confidence == "LOW"]
-
-    lines += [
-        "-" * 72,
-        "FINDINGS BY CONFIDENCE",
-        "-" * 72,
-        f"  HIGH   : {len(high)} rule(s)",
-        f"  MEDIUM : {len(med)} rule(s)",
-        f"  LOW    : {len(low)} rule(s)",
+        f"Total hits: {len(hits)}",
+        f"Rules hit : {len(grouped)}",
         "",
     ]
 
-    for section_label, section_batches in [("HIGH", high), ("MEDIUM", med), ("LOW", low)]:
-        if not section_batches:
-            continue
-        lines += [f"{'=' * 20} {section_label} CONFIDENCE {'=' * 20}"]
-        for batch in section_batches:
-            lines += [
-                "",
-                f"Rule   : {batch.rule_key}",
-                f"Hits   : {len(batch.hits)}",
-                f"Analysis:",
-                _indent(batch.narrative, "  "),
-                "",
-                "  Sample events:",
-            ]
-            for hit in batch.hits[:3]:
-                lines.append(_indent(_format_hit(hit), "    "))
-            if len(batch.hits) > 3:
-                lines.append(f"    ... and {len(batch.hits) - 3} more event(s)")
-            lines.append("")
+    if not hits:
+        lines += ["No detections found.", "=" * 72]
+        return "\n".join(lines)
+
+    lines += ["-" * 72, "DETECTIONS BY RULE", "-" * 72, ""]
+
+    for rule_name, rule_hits in sorted(grouped.items(), key=lambda x: -len(x[1])):
+        severity = _extract_severity(rule_hits[0])
+        lines += [
+            f"Rule     : {rule_name}",
+            f"Severity : {severity}",
+            f"Hits     : {len(rule_hits)}",
+            "Events:",
+        ]
+        for hit in rule_hits[:5]:
+            lines.append(f"  {_format_hit(hit)}")
+        if len(rule_hits) > 5:
+            lines.append(f"  ... and {len(rule_hits) - 5} more event(s)")
+        lines.append("")
 
     lines += ["=" * 72, "END OF REPORT", "=" * 72]
     return "\n".join(lines)
+
+
+def _group_by_rule(hits: list[dict]) -> dict[str, list[dict]]:
+    groups: dict[str, list[dict]] = {}
+    for hit in hits:
+        key = str(
+            hit.get("name")
+            or hit.get("rule_name")
+            or hit.get("document", {}).get("name", "Unknown Rule")
+        )
+        groups.setdefault(key, []).append(hit)
+    return groups
+
+
+def _extract_severity(hit: dict) -> str:
+    return (
+        hit.get("level")
+        or hit.get("severity")
+        or hit.get("document", {}).get("level", "unknown")
+    )
 
 
 def _format_hit(hit: dict) -> str:
@@ -77,8 +72,5 @@ def _format_hit(hit: dict) -> str:
     if isinstance(eid, dict):
         eid = eid.get("#text", "?")
     computer = system.get("Computer", "?")
-    return f"[{ts}] EventID={eid} Computer={computer}"
-
-
-def _indent(text: str, prefix: str) -> str:
-    return "\n".join(prefix + line for line in text.splitlines())
+    user = system.get("Security", {}).get("@UserID", "?")
+    return f"[{ts}] EventID={eid} Computer={computer} User={user}"
