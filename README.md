@@ -69,8 +69,11 @@ pip install -e .
 |---|---|---|
 | `CHAINSAW_BIN` | `chainsaw` / `chainsaw.exe` | Path to Chainsaw binary |
 | `CHAINSAW_RULES` | _(none)_ | Path to Chainsaw rules directory |
-| `CHAINSAW_SIGMA` | _(none)_ | Path to Sigma rules directory |
+| `CHAINSAW_SIGMA` | _(none)_ | Path to Sigma detections directory |
+| `CHAINSAW_MAPPING` | _(none)_ | Path to mapping file for Sigma rules — required when using Sigma detections |
 | `AIM_CLI` | `aim_cli.exe` | Windows only: path to Arsenal Image Mounter CLI |
+
+> **Note on Sigma rules:** Chainsaw requires a mapping file alongside Sigma detections so it knows how to match Sigma field names to Windows Event Log fields. Chainsaw ships these in its `mappings/` directory — `sigma-event-logs-all.yml` is the standard choice.
 
 ---
 
@@ -88,7 +91,8 @@ Add to `claude_desktop_config.json`:
       "env": {
         "CHAINSAW_BIN": "/usr/local/bin/chainsaw",
         "CHAINSAW_RULES": "/opt/chainsaw/rules",
-        "CHAINSAW_SIGMA": "/opt/chainsaw/sigma/rules"
+        "CHAINSAW_SIGMA": "/opt/chainsaw/sigma/rules",
+        "CHAINSAW_MAPPING": "/opt/chainsaw/mappings/sigma-event-logs-all.yml"
       }
     }
   }
@@ -101,7 +105,8 @@ Add to `claude_desktop_config.json`:
 claude mcp add ChainsawMCP ChainsawMCP \
   -e CHAINSAW_BIN=/usr/local/bin/chainsaw \
   -e CHAINSAW_RULES=/opt/chainsaw/rules \
-  -e CHAINSAW_SIGMA=/opt/chainsaw/sigma/rules
+  -e CHAINSAW_SIGMA=/opt/chainsaw/sigma/rules \
+  -e CHAINSAW_MAPPING=/opt/chainsaw/mappings/sigma-event-logs-all.yml
 ```
 
 ### OpenWebUI
@@ -129,9 +134,10 @@ Detects evidence type automatically. For E01 images, locates all `.evtx` files a
 Run `chainsaw hunt` against the staged evidence and return all detections.
 
 ```
-rules_path   (string, optional)  Override CHAINSAW_RULES env var
-sigma_path   (string, optional)  Override CHAINSAW_SIGMA env var
-extra_args   (array,  optional)  Extra flags passed verbatim to chainsaw hunt
+rules_path    (string, optional)  Override CHAINSAW_RULES env var
+sigma_path    (string, optional)  Override CHAINSAW_SIGMA env var
+mapping_path  (string, optional)  Override CHAINSAW_MAPPING env var — required when using sigma_path
+extra_args    (array,  optional)  Extra flags passed verbatim to chainsaw hunt
 ```
 
 Returns hits grouped by rule for the client LLM to analyse. Parses both JSON-array and newline-delimited JSON output from Chainsaw.

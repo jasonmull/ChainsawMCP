@@ -66,6 +66,10 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Path to Sigma rules directory (overrides CHAINSAW_SIGMA env var).",
                     },
+                    "mapping_path": {
+                        "type": "string",
+                        "description": "Path to mapping file for Sigma rules, e.g. mappings/sigma-event-logs-all.yml (overrides CHAINSAW_MAPPING env var). Required when using sigma_path.",
+                    },
                     "extra_args": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -144,10 +148,11 @@ async def _chainsaw_hunt(args: dict) -> CallToolResult:
 
     rules = Path(args["rules_path"]) if args.get("rules_path") else None
     sigma = Path(args["sigma_path"]) if args.get("sigma_path") else None
+    mapping = Path(args["mapping_path"]) if args.get("mapping_path") else None
     extra = args.get("extra_args") or []
 
     try:
-        hits = run_hunt(state.evidence.evtx_dir, rules_path=rules, sigma_path=sigma, extra_args=extra)
+        hits = run_hunt(state.evidence.evtx_dir, rules_path=rules, sigma_path=sigma, mapping_path=mapping, extra_args=extra)
     except ChainsawError as e:
         return _error(str(e))
 

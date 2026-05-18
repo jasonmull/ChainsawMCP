@@ -154,6 +154,11 @@ def test_format_report_caps_sample_events():
 # run_hunt (mocked subprocess)
 # ---------------------------------------------------------------------------
 
+def test_run_hunt_sigma_without_mapping_raises(tmp_path):
+    with pytest.raises(ChainsawError, match="mapping file is required"):
+        run_hunt(tmp_path, sigma_path=Path("/sigma/rules"))
+
+
 def test_run_hunt_binary_not_found(tmp_path):
     with patch("chainsawmcp.chainsaw.subprocess.run", side_effect=FileNotFoundError()):
         with pytest.raises(ChainsawError, match="not found"):

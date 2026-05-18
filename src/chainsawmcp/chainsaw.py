@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .config import get_chainsaw_binary, get_rules_path, get_sigma_path
+from .config import get_chainsaw_binary, get_mapping_path, get_rules_path, get_sigma_path
 
 
 class ChainsawError(Exception):
@@ -16,13 +16,22 @@ def run_hunt(
     evtx_dir: Path,
     rules_path: Path | None = None,
     sigma_path: Path | None = None,
+    mapping_path: Path | None = None,
     extra_args: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Run `chainsaw hunt` and return parsed JSON hits."""
     rules = rules_path or get_rules_path()
     sigma = sigma_path or get_sigma_path()
+    mapping = mapping_path or get_mapping_path()
 
-    cmd = _build_command(evtx_dir, rules, sigma, extra_args or [])
+    if sigma and not mapping:
+        raise ChainsawError(
+            "A mapping file is required when using Sigma rules. "
+            "Provide mapping_path or set the CHAINSAW_MAPPING env var. "
+            "Chainsaw ships mappings in mappings/sigma-event-logs-all.yml."
+        )
+
+    cmd = _build_command(evtx_dir, rules, sigma, mapping, extra_args or [])
 
     try:
         result = subprocess.run(
@@ -52,6 +61,7 @@ def _build_command(
     evtx_dir: Path,
     rules_path: Path | None,
     sigma_path: Path | None,
+    mapping_path: Path | None,
     extra_args: list[str],
 ) -> list[str]:
     binary = get_chainsaw_binary()
@@ -61,6 +71,8 @@ def _build_command(
         cmd += ["--rules", str(rules_path)]
     if sigma_path:
         cmd += ["--sigma", str(sigma_path)]
+    if mapping_path:
+        cmd += ["--mapping", str(mapping_path)]
 
     cmd += extra_args
     return cmd
