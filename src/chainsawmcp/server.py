@@ -1,6 +1,7 @@
 """MCP server entry point — exposes Chainsaw tools over the Model Context Protocol."""
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,11 @@ class _SessionState:
     evidence: PreparedEvidence | None = None
     hits: list[dict] = []
     evidence_path: str = ""
+    hunt_status: str = "idle"   # idle | running | done | error
+    hunt_started_at: float | None = None
+    hunt_finished_at: float | None = None
+    hunt_error: str = ""
+    _hunt_task: asyncio.Task | None = None
 
 
 state = _SessionState()
@@ -52,8 +58,8 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="chainsaw_hunt",
             description=(
-                "Run Chainsaw hunt against staged EVTXs. "
-                "Returns all detections grouped by rule for the client to analyse."
+                "Start a Chainsaw hunt against staged EVTXs in the background. "
+                "Returns immediately — call hunt_status to poll for completion."
             ),
             inputSchema={
                 "type": "object",
@@ -80,10 +86,22 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="hunt_status",
+            description=(
+                "Check the status of a running or completed Chainsaw hunt. "
+                "Poll this after calling chainsaw_hunt until status is 'done' or 'error'."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        ),
+        Tool(
             name="chainsaw_report",
             description=(
                 "Format hunt results into a structured analyst report. "
-                "Call chainsaw_hunt first."
+                "Call after hunt_status reports 'done'."
             ),
             inputSchema={
                 "type": "object",
@@ -103,6 +121,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
     handlers = {
         "prepare_evidence": _prepare_evidence,
         "chainsaw_hunt": _chainsaw_hunt,
+        "hunt_status": _hunt_status,
         "chainsaw_report": _chainsaw_report,
     }
     handler = handlers.get(name)
@@ -120,6 +139,9 @@ async def _prepare_evidence(args: dict) -> CallToolResult:
     if not path:
         return _error("'path' argument is required.")
 
+    if state.hunt_status == "running":
+        return _error("A hunt is currently running. Wait for it to finish before re-staging evidence.")
+
     if state.evidence:
         state.evidence.cleanup()
 
@@ -131,6 +153,10 @@ async def _prepare_evidence(args: dict) -> CallToolResult:
     state.evidence = ev
     state.hits = []
     state.evidence_path = path
+    state.hunt_status = "idle"
+    state.hunt_started_at = None
+    state.hunt_finished_at = None
+    state.hunt_error = ""
 
     evtx_count = len(list(ev.evtx_dir.rglob("*.evtx")))
     return _ok(
@@ -146,29 +172,80 @@ async def _chainsaw_hunt(args: dict) -> CallToolResult:
     if not state.evidence:
         return _error("No evidence staged. Call prepare_evidence first.")
 
+    if state.hunt_status == "running":
+        elapsed = time.time() - (state.hunt_started_at or time.time())
+        return _error(
+            f"A hunt is already running ({_fmt_elapsed(elapsed)}). "
+            "Call hunt_status to check progress."
+        )
+
     rules = Path(args["rules_path"]) if args.get("rules_path") else None
     sigma = Path(args["sigma_path"]) if args.get("sigma_path") else None
     mapping = Path(args["mapping_path"]) if args.get("mapping_path") else None
     extra = args.get("extra_args") or []
 
-    try:
-        hits = await run_hunt_async(state.evidence.evtx_dir, rules_path=rules, sigma_path=sigma, mapping_path=mapping, extra_args=extra)
-    except ChainsawError as e:
-        return _error(str(e))
+    evtx_dir = state.evidence.evtx_dir
+    evtx_count = len(list(evtx_dir.rglob("*.evtx")))
 
-    state.hits = hits
+    state.hits = []
+    state.hunt_status = "running"
+    state.hunt_started_at = time.time()
+    state.hunt_finished_at = None
+    state.hunt_error = ""
 
-    summary = _hits_summary(hits)
+    async def _run() -> None:
+        try:
+            hits = await run_hunt_async(evtx_dir, rules_path=rules, sigma_path=sigma, mapping_path=mapping, extra_args=extra)
+            state.hits = hits
+            state.hunt_status = "done"
+        except ChainsawError as exc:
+            state.hunt_error = str(exc)
+            state.hunt_status = "error"
+        finally:
+            state.hunt_finished_at = time.time()
+
+    state._hunt_task = asyncio.create_task(_run())
+
     return _ok(
-        f"Hunt complete — {len(hits)} hit(s) found.\n\n"
-        f"{summary}\n\n"
-        "Call chainsaw_report for a formatted report."
+        f"Hunt started against {evtx_count} EVTX file(s).\n"
+        "Call hunt_status to check progress."
     )
+
+
+async def _hunt_status(_args: dict) -> CallToolResult:
+    status = state.hunt_status
+
+    if status == "idle":
+        return _ok("No hunt has been started. Call chainsaw_hunt first.")
+
+    elapsed = _fmt_elapsed(
+        ((state.hunt_finished_at or time.time()) - (state.hunt_started_at or time.time()))
+    )
+
+    if status == "running":
+        return _ok(f"Hunt running — {elapsed} elapsed. Call hunt_status again to check.")
+
+    if status == "done":
+        summary = _hits_summary(state.hits)
+        return _ok(
+            f"Hunt complete in {elapsed} — {len(state.hits)} hit(s) found.\n\n"
+            f"{summary}\n\n"
+            "Call chainsaw_report for a formatted report."
+        )
+
+    # error
+    return _ok(f"Hunt failed after {elapsed}: {state.hunt_error}")
 
 
 async def _chainsaw_report(_args: dict) -> CallToolResult:
     if not state.evidence:
         return _error("No evidence staged. Call prepare_evidence first.")
+
+    if state.hunt_status == "running":
+        return _error("Hunt is still running. Call hunt_status to check progress.")
+
+    if state.hunt_status != "done":
+        return _error("No completed hunt results. Call chainsaw_hunt first.")
 
     report = format_report(state.hits, evtx_path=state.evidence_path)
     return _ok(report)
@@ -177,6 +254,14 @@ async def _chainsaw_report(_args: dict) -> CallToolResult:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _fmt_elapsed(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    m, s = divmod(seconds, 60)
+    return f"{m}m {s}s"
+
 
 def _hits_summary(hits: list[dict]) -> str:
     counts: dict[str, int] = {}
