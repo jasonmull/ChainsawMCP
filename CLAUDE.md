@@ -127,4 +127,44 @@ Based on the initial build session (2026-05-18)
        left over from the enrichment design — remove before next feature work
      - No end-to-end test of E01 mounting against a real image
      - No hunt cancellation mechanism
+
+## ADDITIONAL SUGGESTIONS FROM FOLLOW-UP SESSION (2026-05-18)
+
+## Suggestions for improving this file (added 2026-05-18)
+
+These are things that would have made guidance more accurate or saved
+debugging time in the session on 2026-05-18:
+
+### 1. Pin the Chainsaw version and document its exact CLI
+The installed Chainsaw version differs from what online docs describe.
+The CLI surface has changed across releases. Add something like:
+
+  **Chainsaw version in use:** v2.x.x (check with `chainsaw --version`)
+  **Verified hunt invocation:**
+    chainsaw hunt --json --preprocess <RULES_DIR> <EVTX_DIR>
+
+  Before adding any new CLI flag, verify it exists:
+    chainsaw hunt --help
+
+### 2. Note that MCP tool handlers must never block the event loop
+Add to Key Design Decisions:
+  - MCP tool handlers are async. Never call blocking I/O (subprocess.run,
+    open, os.walk on large trees) directly in a handler. Use
+    asyncio.to_thread() for any blocking subprocess or file operation.
+
+### 3. Document the hunt_status polling tool
+The MCP Tools list is now out of date. It should include:
+  4. `hunt_status` — poll for background hunt progress (idle/running/done/error)
+
+### 4. Add a Chainsaw output parsing note
+The JSON output format from Chainsaw is not well-documented and varies.
+Note that _parse_output() handles both JSON arrays and newline-delimited
+JSON, and silently drops non-JSON lines. Any future parser changes should
+preserve that resilience.
+
+### 5. Clarify the expected hunt duration range
+"Chainsaw runs can take a while" is vague. In practice, 296 EVTX files
+took approximately 3 minutes on the test system. Documenting a rough
+benchmark (files → expected minutes) would help set timeout defaults and
+alert the developer when something is actually hung vs. just slow.
 -->

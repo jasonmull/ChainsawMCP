@@ -80,7 +80,6 @@ Do not assume Chainsaw CLI flags match documentation or intuition. Before adding
 - **The `config.py` module still has `get_ollama_base_url()` and `get_ollama_model()` left over from the enrichment design.** These are dead code — clean them up before the next feature addition.
 
 ---
-
 ## ADR-001: Run Chainsaw as a background asyncio task, poll for status
 
 **Date:** 2026-05-18
