@@ -76,3 +76,55 @@ Before writing code, confirm:
 1. Are we on Windows or Linux right now? (affects binary names and mount tooling)
 2. Is this a new feature, bug fix, or refactor?
 3. Do we have sample EVTX data available for testing?
+
+---
+
+<!--
+SUGGESTIONS FOR IMPROVING THIS FILE
+Based on the initial build session (2026-05-18)
+
+1. CHAINSAW CLI VERSION
+   Add a note stating which exact version of Chainsaw is installed and tested
+   against, with output of `chainsaw --version`. Flags change across versions
+   and this caused real bugs in session 1 (--rules vs --rule, missing --mapping,
+   false report of --no-progress). A pinned version removes ambiguity.
+   Example addition:
+     ## Chainsaw Version
+     Tested against: Chainsaw v2.x.x (run `chainsaw --version` to confirm)
+     Key flags for this version: --rule, --sigma, --mapping, --json
+     Before adding any new subprocess flag, verify with: `chainsaw hunt --help`
+
+2. LLM CLIENT CONTEXT
+   The server makes zero LLM calls — the client handles all reasoning. This
+   took a full design-then-undo cycle to settle. State it earlier and more
+   explicitly so it's the first constraint an AI assistant sees, not something
+   discovered mid-build. Add to "What NOT to Do":
+     - Don't add server-side LLM calls under any framing (enrichment, summarisation,
+       confidence scoring). The client IS the LLM. This is a deliberate design choice,
+       not a gap to fill.
+
+3. TARGET DEPLOYMENT ENVIRONMENT
+   Add a short section describing where this actually runs — Windows machine,
+   specific Python version, how Chainsaw is installed, where rules/sigma/mappings
+   live on disk. This would have prevented the cross-platform ambiguity early in
+   the session and grounded flag discussions in the actual deployment target.
+   Example addition:
+     ## Deployment Environment
+     - OS: Windows (primary), Linux (secondary)
+     - Python: 3.11+
+     - Chainsaw: installed at C:\Tools\chainsaw\chainsaw.exe (or on PATH)
+     - Rules: C:\Tools\chainsaw\rules\
+     - Sigma: C:\Tools\chainsaw\sigma\rules\
+     - Mapping: C:\Tools\chainsaw\mappings\sigma-event-logs-all.yml
+
+4. KNOWN OPEN ISSUES
+   Add a section for known issues/TODOs so an AI assistant picks them up at
+   session start rather than discovering them mid-task. Based on this session:
+     ## Known Issues / Next Steps
+     - chainsaw_hunt blocks the asyncio event loop on large evidence sets
+       (fix: asyncio.to_thread — see main branch ADR-001)
+     - config.py has dead Ollama functions (get_ollama_base_url, get_ollama_model)
+       left over from the enrichment design — remove before next feature work
+     - No end-to-end test of E01 mounting against a real image
+     - No hunt cancellation mechanism
+-->
