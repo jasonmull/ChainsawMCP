@@ -33,6 +33,11 @@ def get_sigma_path() -> Path | None:
     return Path(val) if val else None
 
 
+def get_mapping_path() -> Path | None:
+    val = os.environ.get("CHAINSAW_MAPPING")
+    return Path(val) if val else None
+
+
 def get_batch_size() -> int:
     try:
         return int(os.environ.get("ENRICHMENT_BATCH_SIZE", "20"))
