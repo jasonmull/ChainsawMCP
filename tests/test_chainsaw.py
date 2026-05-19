@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from chainsawmcp.chainsaw import ChainsawError, _parse_output, run_hunt
+from chainsawmcp.chainsaw import ChainsawError, HuntResult, _parse_output, run_hunt
 from chainsawmcp.config import get_batch_size, get_ollama_base_url, get_ollama_model
 from chainsawmcp.evidence import EvidenceError, PreparedEvidence, _prepare_evtx_dir
 from chainsawmcp.report import format_report, _group_by_rule, _extract_severity
@@ -176,8 +176,18 @@ def test_run_hunt_nonzero_exit(tmp_path):
 
 def test_run_hunt_success(tmp_path):
     hits = [{"name": "Test Rule"}]
-    mock = MagicMock()
-    mock.returncode = 0
-    mock.stdout = json.dumps(hits)
-    with patch("chainsawmcp.chainsaw.subprocess.run", return_value=mock):
-        assert run_hunt(tmp_path) == hits
+
+    def _fake_run(cmd, stdout, **kwargs):
+        stdout.write(json.dumps(hits))
+        mock = MagicMock()
+        mock.returncode = 0
+        mock.stderr = ""
+        return mock
+
+    with patch("chainsawmcp.chainsaw.subprocess.run", side_effect=_fake_run):
+        with patch("chainsawmcp.chainsaw.get_output_dir", return_value=tmp_path):
+            result = run_hunt(tmp_path)
+
+    assert isinstance(result, HuntResult)
+    assert result.hits == hits
+    assert result.output_file is not None
