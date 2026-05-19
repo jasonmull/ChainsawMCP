@@ -9,7 +9,13 @@ import pytest
 from chainsawmcp.chainsaw import ChainsawError, HuntResult, _parse_output, run_hunt
 from chainsawmcp.config import get_batch_size, get_ollama_base_url, get_ollama_model
 from chainsawmcp.evidence import EvidenceError, PreparedEvidence, _prepare_evtx_dir
-from chainsawmcp.report import format_report, _group_by_rule, _extract_severity
+from chainsawmcp.report import (
+    format_full_report,
+    format_summary,
+    get_detections,
+    _group_by_rule,
+    _extract_severity,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -125,13 +131,13 @@ def test_extract_severity():
     assert _extract_severity({}) == "unknown"
 
 
-def test_format_report_structure():
+def test_format_full_report_structure():
     hits = [
         {"name": "Mimikatz", "level": "high", "timestamp": "2024-01-01T00:00:00Z"},
         {"name": "Mimikatz", "level": "high", "timestamp": "2024-01-01T00:01:00Z"},
         {"name": "PSExec",   "level": "medium", "timestamp": "2024-01-01T00:02:00Z"},
     ]
-    report = format_report(hits, evtx_path="/evidence/Security.evtx")
+    report = format_full_report(hits, evtx_path="/evidence/Security.evtx")
     assert "ChainsawMCP" in report
     assert "Mimikatz" in report
     assert "PSExec" in report
@@ -139,15 +145,63 @@ def test_format_report_structure():
     assert "Rules hit : 2" in report
 
 
-def test_format_report_empty():
-    report = format_report([], evtx_path="/empty")
+def test_format_full_report_empty():
+    report = format_full_report([], evtx_path="/empty")
     assert "No detections found" in report
 
 
-def test_format_report_caps_sample_events():
+def test_format_full_report_caps_sample_events():
     hits = [{"name": "Noisy", "level": "low", "timestamp": f"t{i}"} for i in range(10)]
-    report = format_report(hits, evtx_path="/evidence")
+    report = format_full_report(hits, evtx_path="/evidence")
     assert "and 5 more event(s)" in report
+
+
+def test_format_summary_is_compact():
+    hits = [
+        {"name": "Mimikatz", "level": "critical"},
+        {"name": "PSExec", "level": "high"},
+    ]
+    summary = format_summary(hits, evtx_path="/evidence")
+    assert "HUNT SUMMARY" in summary
+    assert "Mimikatz" in summary
+    assert "critical" in summary
+    # should NOT contain full event detail lines
+    assert "EventID=" not in summary
+
+
+def test_get_detections_filter_by_rule():
+    hits = [
+        {"name": "Mimikatz", "level": "critical"},
+        {"name": "PSExec", "level": "high"},
+        {"name": "Mimikatz Variant", "level": "high"},
+    ]
+    result = get_detections(hits, rule="mimikatz")
+    assert "Mimikatz" in result
+    assert "PSExec" not in result
+
+
+def test_get_detections_filter_by_severity():
+    hits = [
+        {"name": "RuleA", "level": "critical"},
+        {"name": "RuleB", "level": "high"},
+        {"name": "RuleC", "level": "critical"},
+    ]
+    result = get_detections(hits, severity="critical")
+    assert "RuleA" in result
+    assert "RuleC" in result
+    assert "RuleB" not in result
+
+
+def test_get_detections_limit():
+    hits = [{"name": f"Rule{i}", "level": "high"} for i in range(50)]
+    result = get_detections(hits, limit=10)
+    assert "40 more hit(s)" in result
+
+
+def test_get_detections_no_match():
+    hits = [{"name": "Mimikatz", "level": "high"}]
+    result = get_detections(hits, rule="nonexistent")
+    assert "No hits matched" in result
 
 
 # ---------------------------------------------------------------------------

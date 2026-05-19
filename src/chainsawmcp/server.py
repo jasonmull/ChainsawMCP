@@ -10,8 +10,9 @@ from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent, Tool
 
 from .chainsaw import ChainsawError, HuntResult, run_hunt_async
+from .config import get_output_dir
 from .evidence import EvidenceError, PreparedEvidence, prepare_evidence
-from .report import format_report
+from .report import format_summary, get_detections, write_full_report
 
 app = Server("ChainsawMCP")
 
@@ -21,6 +22,7 @@ class _SessionState:
     evidence: PreparedEvidence | None = None
     hits: list[dict] = []
     output_file: str = ""
+    report_file: str = ""
     evidence_path: str = ""
     hunt_status: str = "idle"   # idle | running | done | error
     hunt_started_at: float | None = None
@@ -101,12 +103,39 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="chainsaw_report",
             description=(
-                "Format hunt results into a structured analyst report. "
-                "Call after hunt_status reports 'done'."
+                "Write the full hunt report to disk and return a concise summary with severity "
+                "breakdown and top detections. Call after hunt_status reports 'done'. "
+                "Use get_detections to drill into specific rules."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {},
+                "required": [],
+            },
+        ),
+        Tool(
+            name="get_detections",
+            description=(
+                "Return individual events from the completed hunt, optionally filtered by rule name "
+                "(substring match) or severity level. Use this to investigate specific detections "
+                "after chainsaw_report shows the summary."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "rule": {
+                        "type": "string",
+                        "description": "Filter events whose rule name contains this string (case-insensitive).",
+                    },
+                    "severity": {
+                        "type": "string",
+                        "description": "Filter by exact severity level, e.g. 'critical', 'high', 'medium', 'low'.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of events to return (default 25).",
+                    },
+                },
                 "required": [],
             },
         ),
@@ -124,6 +153,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
         "chainsaw_hunt": _chainsaw_hunt,
         "hunt_status": _hunt_status,
         "chainsaw_report": _chainsaw_report,
+        "get_detections": _get_detections,
     }
     handler = handlers.get(name)
     if handler is None:
@@ -154,6 +184,7 @@ async def _prepare_evidence(args: dict) -> CallToolResult:
     state.evidence = ev
     state.hits = []
     state.output_file = ""
+    state.report_file = ""
     state.evidence_path = path
     state.hunt_status = "idle"
     state.hunt_started_at = None
@@ -191,6 +222,7 @@ async def _chainsaw_hunt(args: dict) -> CallToolResult:
 
     state.hits = []
     state.output_file = ""
+    state.report_file = ""
     state.hunt_status = "running"
     state.hunt_started_at = time.time()
     state.hunt_finished_at = None
@@ -238,10 +270,9 @@ async def _hunt_status(_args: dict) -> CallToolResult:
         return _ok(
             f"Hunt complete in {elapsed} — {len(state.hits)} hit(s) found.{file_line}\n\n"
             f"{summary}\n\n"
-            "Call chainsaw_report for a formatted report."
+            "Call chainsaw_report for a summary with severity breakdown."
         )
 
-    # error
     return _ok(f"Hunt failed after {elapsed}: {state.hunt_error}")
 
 
@@ -255,8 +286,27 @@ async def _chainsaw_report(_args: dict) -> CallToolResult:
     if state.hunt_status != "done":
         return _error("No completed hunt results. Call chainsaw_hunt first.")
 
-    report = format_report(state.hits, evtx_path=state.evidence_path)
-    return _ok(report)
+    report_file = write_full_report(
+        state.hits,
+        evtx_path=state.evidence_path,
+        output_dir=get_output_dir(),
+    )
+    state.report_file = str(report_file)
+
+    summary = format_summary(state.hits, evtx_path=state.evidence_path, report_file=report_file)
+    return _ok(summary)
+
+
+async def _get_detections(args: dict) -> CallToolResult:
+    if state.hunt_status != "done":
+        return _error("No completed hunt results. Call chainsaw_hunt and wait for it to finish.")
+
+    rule = args.get("rule") or None
+    severity = args.get("severity") or None
+    limit = int(args.get("limit") or 25)
+
+    text = get_detections(state.hits, rule=rule, severity=severity, limit=limit)
+    return _ok(text)
 
 
 # ---------------------------------------------------------------------------
