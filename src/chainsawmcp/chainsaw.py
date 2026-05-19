@@ -3,14 +3,28 @@
 import asyncio
 import json
 import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .config import get_chainsaw_binary, get_hunt_timeout, get_mapping_path, get_rules_path, get_sigma_path
+from .config import (
+    get_chainsaw_binary,
+    get_hunt_timeout,
+    get_mapping_path,
+    get_output_dir,
+    get_rules_path,
+    get_sigma_path,
+)
 
 
 class ChainsawError(Exception):
     pass
+
+
+@dataclass
+class HuntResult:
+    hits: list[dict[str, Any]] = field(default_factory=list)
+    output_file: Path | None = None
 
 
 async def run_hunt_async(
@@ -19,7 +33,7 @@ async def run_hunt_async(
     sigma_path: Path | None = None,
     mapping_path: Path | None = None,
     extra_args: list[str] | None = None,
-) -> list[dict[str, Any]]:
+) -> HuntResult:
     """Run `chainsaw hunt` without blocking the asyncio event loop."""
     return await asyncio.to_thread(
         run_hunt, evtx_dir, rules_path, sigma_path, mapping_path, extra_args
@@ -32,8 +46,8 @@ def run_hunt(
     sigma_path: Path | None = None,
     mapping_path: Path | None = None,
     extra_args: list[str] | None = None,
-) -> list[dict[str, Any]]:
-    """Run `chainsaw hunt` and return parsed JSON hits (blocking)."""
+) -> HuntResult:
+    """Run `chainsaw hunt`, stream output to a file, and return parsed hits (blocking)."""
     rules = rules_path or get_rules_path()
     sigma = sigma_path or get_sigma_path()
     mapping = mapping_path or get_mapping_path()
@@ -48,13 +62,20 @@ def run_hunt(
     cmd = _build_command(evtx_dir, rules, sigma, mapping, extra_args or [])
     timeout = get_hunt_timeout()
 
+    output_dir = get_output_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_file = output_dir / "hunt_results.json"
+
+    # Stream stdout directly to a file — avoids pipe buffer exhaustion on large hunts.
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        with output_file.open("w", encoding="utf-8") as fh:
+            result = subprocess.run(
+                cmd,
+                stdout=fh,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+            )
     except FileNotFoundError:
         binary = get_chainsaw_binary()
         raise ChainsawError(
@@ -69,7 +90,8 @@ def run_hunt(
             f"Chainsaw exited with code {result.returncode}.\nstderr: {result.stderr}"
         )
 
-    return _parse_output(result.stdout)
+    hits = _parse_output_file(output_file)
+    return HuntResult(hits=hits, output_file=output_file)
 
 
 def _build_command(
@@ -93,13 +115,20 @@ def _build_command(
     return cmd
 
 
+def _parse_output_file(path: Path) -> list[dict[str, Any]]:
+    """Read and parse Chainsaw's JSON output file."""
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return []
+    return _parse_output(raw)
+
+
 def _parse_output(raw: str) -> list[dict[str, Any]]:
     """Parse Chainsaw's JSON output, which may be a JSON array or newline-delimited objects."""
-    raw = raw.strip()
     if not raw:
         return []
 
-    # Try as a JSON array first
     if raw.startswith("["):
         try:
             data = json.loads(raw)
@@ -107,7 +136,6 @@ def _parse_output(raw: str) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             pass
 
-    # Fall back to newline-delimited JSON
     hits: list[dict] = []
     for line in raw.splitlines():
         line = line.strip()
@@ -120,7 +148,6 @@ def _parse_output(raw: str) -> list[dict[str, Any]]:
             elif isinstance(obj, dict):
                 hits.append(obj)
         except json.JSONDecodeError:
-            # Skip non-JSON lines (e.g. progress messages written to stdout)
             continue
 
     return hits

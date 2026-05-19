@@ -9,7 +9,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent, Tool
 
-from .chainsaw import ChainsawError, run_hunt_async
+from .chainsaw import ChainsawError, HuntResult, run_hunt_async
 from .evidence import EvidenceError, PreparedEvidence, prepare_evidence
 from .report import format_report
 
@@ -20,6 +20,7 @@ class _SessionState:
     """Module-level session state for a single analysis session."""
     evidence: PreparedEvidence | None = None
     hits: list[dict] = []
+    output_file: str = ""
     evidence_path: str = ""
     hunt_status: str = "idle"   # idle | running | done | error
     hunt_started_at: float | None = None
@@ -152,6 +153,7 @@ async def _prepare_evidence(args: dict) -> CallToolResult:
 
     state.evidence = ev
     state.hits = []
+    state.output_file = ""
     state.evidence_path = path
     state.hunt_status = "idle"
     state.hunt_started_at = None
@@ -188,6 +190,7 @@ async def _chainsaw_hunt(args: dict) -> CallToolResult:
     evtx_count = len(list(evtx_dir.rglob("*.evtx")))
 
     state.hits = []
+    state.output_file = ""
     state.hunt_status = "running"
     state.hunt_started_at = time.time()
     state.hunt_finished_at = None
@@ -195,8 +198,12 @@ async def _chainsaw_hunt(args: dict) -> CallToolResult:
 
     async def _run() -> None:
         try:
-            hits = await run_hunt_async(evtx_dir, rules_path=rules, sigma_path=sigma, mapping_path=mapping, extra_args=extra)
-            state.hits = hits
+            result: HuntResult = await run_hunt_async(
+                evtx_dir, rules_path=rules, sigma_path=sigma,
+                mapping_path=mapping, extra_args=extra,
+            )
+            state.hits = result.hits
+            state.output_file = str(result.output_file) if result.output_file else ""
             state.hunt_status = "done"
         except ChainsawError as exc:
             state.hunt_error = str(exc)
@@ -227,8 +234,9 @@ async def _hunt_status(_args: dict) -> CallToolResult:
 
     if status == "done":
         summary = _hits_summary(state.hits)
+        file_line = f"\n  Results file: {state.output_file}" if state.output_file else ""
         return _ok(
-            f"Hunt complete in {elapsed} — {len(state.hits)} hit(s) found.\n\n"
+            f"Hunt complete in {elapsed} — {len(state.hits)} hit(s) found.{file_line}\n\n"
             f"{summary}\n\n"
             "Call chainsaw_report for a formatted report."
         )

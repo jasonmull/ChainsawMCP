@@ -46,6 +46,15 @@ def get_hunt_timeout() -> int:
         return 1800
 
 
+def get_output_dir() -> Path:
+    """Directory where Chainsaw JSON output is written. Override with CHAINSAW_OUTPUT_DIR."""
+    val = os.environ.get("CHAINSAW_OUTPUT_DIR")
+    if val:
+        return Path(val)
+    import tempfile
+    return Path(tempfile.gettempdir()) / "chainsawmcp"
+
+
 def get_batch_size() -> int:
     try:
         return int(os.environ.get("ENRICHMENT_BATCH_SIZE", "20"))
