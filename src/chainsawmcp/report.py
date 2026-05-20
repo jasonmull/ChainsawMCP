@@ -169,18 +169,22 @@ def _extract_severity(hit: dict) -> str:
     )
 
 
-def _get_system(hit: dict) -> dict:
-    """Return the System block regardless of whether document wraps it in an Event key."""
+def _get_event(hit: dict) -> dict:
+    """Return the Event block, handling both document.data.Event and document.Event paths."""
     doc = hit.get("document", {})
-    # Chainsaw wraps parsed EVTX as document.Event.System
-    event = doc.get("Event", doc)
-    return event.get("System", {})
+    # Chainsaw actual output: document.data.Event (lowercase 'data')
+    # Fallback: document.Event (older / alternate builds)
+    return doc.get("data", doc).get("Event", doc.get("Event", {}))
+
+
+def _get_system(hit: dict) -> dict:
+    """Return the System block."""
+    return _get_event(hit).get("System", {})
 
 
 def _get_event_data(hit: dict) -> dict:
     """Return the EventData block as a flat {name: value} dict."""
-    doc = hit.get("document", {})
-    event = doc.get("Event", doc)
+    event = _get_event(hit)
     ed = event.get("EventData", {})
     if not ed:
         return {}
@@ -227,9 +231,15 @@ def _format_event_data(hit: dict) -> str:
     if not ed:
         return ""
 
+    # Combine domain + username into a single User field
+    parts: list[str] = []
+    user = ed.get("TargetUserName") or ed.get("SubjectUserName")
+    domain = ed.get("TargetDomainName") or ed.get("SubjectDomainName")
+    if user and str(user) not in ("-", "??", ""):
+        parts.append(f"User={domain}\\{user}" if domain and str(domain) not in ("-", "??", "") else f"User={user}")
+
     # Priority fields for common Windows security events
     priority = [
-        "TargetUserName", "TargetDomainName", "SubjectUserName",
         "IpAddress", "WorkstationName", "LogonType",
         "ServiceName", "ImagePath",
         "CommandLine", "ParentCommandLine",
@@ -237,14 +247,13 @@ def _format_event_data(hit: dict) -> str:
         "ShareName", "RelativeTargetName",
         "ObjectName", "AccessMask",
     ]
-    parts: list[str] = []
     for key in priority:
         val = ed.get(key)
         if val and str(val) not in ("-", "??", "0x0", ""):
             parts.append(f"{key}={val}")
 
     # Fall back: show first few non-empty fields not already shown
-    shown_keys = set(priority)
+    shown_keys = set(priority) | {"TargetUserName", "TargetDomainName", "SubjectUserName", "SubjectDomainName"}
     for key, val in ed.items():
         if key in shown_keys:
             continue

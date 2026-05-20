@@ -211,25 +211,27 @@ def test_get_detections_no_match():
 # Event field extraction (Chainsaw JSON structure)
 # ---------------------------------------------------------------------------
 
-# Minimal hit in the shape Chainsaw actually emits: document.Event.System / .EventData
+# Minimal hit in the shape Chainsaw actually emits: document.data.Event
 _RDP_HIT = {
     "name": "Remote Interactive Logon",
     "level": "critical",
     "timestamp": "2018-08-31T12:34:56.000Z",
     "document": {
-        "Event": {
-            "System": {
-                "EventID": 4624,
-                "Computer": "DC01.corp.local",
-                "TimeCreated": {"SystemTime": "2018-08-31T12:34:56.000Z"},
-            },
-            "EventData": {
-                "TargetUserName": "Administrator",
-                "TargetDomainName": "CORP",
-                "IpAddress": "10.10.10.50",
-                "WorkstationName": "ATTACKER-PC",
-                "LogonType": 10,
-            },
+        "data": {
+            "Event": {
+                "System": {
+                    "EventID": 4624,
+                    "Computer": "DC01.corp.local",
+                    "TimeCreated": {"SystemTime": "2018-08-31T12:34:56.000Z"},
+                },
+                "EventData": {
+                    "TargetUserName": "Administrator",
+                    "TargetDomainName": "CORP",
+                    "IpAddress": "10.10.10.50",
+                    "WorkstationName": "ATTACKER-PC",
+                    "LogonType": 10,
+                },
+            }
         }
     },
 }
@@ -261,14 +263,16 @@ def test_get_event_data_list_format():
     """EventData.Data as a list of {#attributes: {Name:...}, #text:...} objects."""
     hit = {
         "document": {
-            "Event": {
-                "System": {},
-                "EventData": {
-                    "Data": [
-                        {"#attributes": {"Name": "TargetUserName"}, "#text": "jdoe"},
-                        {"#attributes": {"Name": "IpAddress"}, "#text": "192.168.1.1"},
-                    ]
-                },
+            "data": {
+                "Event": {
+                    "System": {},
+                    "EventData": {
+                        "Data": [
+                            {"#attributes": {"Name": "TargetUserName"}, "#text": "jdoe"},
+                            {"#attributes": {"Name": "IpAddress"}, "#text": "192.168.1.1"},
+                        ]
+                    },
+                }
             }
         }
     }
@@ -279,7 +283,7 @@ def test_get_event_data_list_format():
 
 def test_format_event_data_shows_priority_fields():
     line = _format_event_data(_RDP_HIT)
-    assert "TargetUserName=Administrator" in line
+    assert "User=CORP\\Administrator" in line
     assert "IpAddress=10.10.10.50" in line
     assert "WorkstationName=ATTACKER-PC" in line
 
@@ -288,20 +292,22 @@ def test_format_event_data_suppresses_dashes():
     """Fields with value '-' (Chainsaw's null sentinel) must be omitted."""
     hit = {
         "document": {
-            "Event": {
-                "System": {},
-                "EventData": {"IpAddress": "-", "TargetUserName": "jdoe"},
+            "data": {
+                "Event": {
+                    "System": {},
+                    "EventData": {"IpAddress": "-", "TargetUserName": "jdoe"},
+                }
             }
         }
     }
     line = _format_event_data(hit)
     assert "IpAddress" not in line
-    assert "TargetUserName=jdoe" in line
+    assert "User=jdoe" in line
 
 
 def test_get_detections_shows_event_data():
     result = get_detections([_RDP_HIT])
-    assert "TargetUserName=Administrator" in result
+    assert "User=CORP\\Administrator" in result
     assert "IpAddress=10.10.10.50" in result
 
 
