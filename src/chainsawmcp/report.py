@@ -126,6 +126,9 @@ def get_detections(
     for hit in shown:
         lines.append(f"  [{_extract_severity(hit)}]  {_rule_name(hit)}")
         lines.append(f"    {_format_hit(hit)}")
+        event_data = _format_event_data(hit)
+        if event_data:
+            lines.append(f"    {event_data}")
     if total > limit:
         lines.append(f"\n... {total - limit} more hit(s) — increase limit or narrow filters.")
     return "\n".join(lines)
@@ -166,13 +169,88 @@ def _extract_severity(hit: dict) -> str:
     )
 
 
+def _get_system(hit: dict) -> dict:
+    """Return the System block regardless of whether document wraps it in an Event key."""
+    doc = hit.get("document", {})
+    # Chainsaw wraps parsed EVTX as document.Event.System
+    event = doc.get("Event", doc)
+    return event.get("System", {})
+
+
+def _get_event_data(hit: dict) -> dict:
+    """Return the EventData block as a flat {name: value} dict."""
+    doc = hit.get("document", {})
+    event = doc.get("Event", doc)
+    ed = event.get("EventData", {})
+    if not ed:
+        return {}
+    # Some parsers emit EventData.Data as a list of {"#attributes": {"Name": ...}, "#text": ...}
+    if isinstance(ed.get("Data"), list):
+        result: dict[str, Any] = {}
+        for item in ed["Data"]:
+            if isinstance(item, dict):
+                name = item.get("#attributes", {}).get("Name") or item.get("@Name")
+                val = item.get("#text") or item.get("@text")
+                if name:
+                    result[name] = val
+        return result
+    # Flat dict: {"TargetUserName": "...", "IpAddress": "...", ...}
+    return {k: v for k, v in ed.items() if not k.startswith("#") and not k.startswith("@")}
+
+
 def _format_hit(hit: dict) -> str:
-    doc = hit.get("document", hit)
-    system = doc.get("System", {})
-    ts = system.get("TimeCreated", {}).get("@SystemTime", hit.get("timestamp", "?"))
-    eid = system.get("EventID", {})
+    system = _get_system(hit)
+
+    # Timestamp: prefer top-level hit.timestamp, fall back to System.TimeCreated
+    ts = hit.get("timestamp")
+    if not ts:
+        tc = system.get("TimeCreated", {})
+        ts = (
+            tc.get("SystemTime")          # Chainsaw native format
+            or tc.get("@SystemTime")      # alternate serialisation
+            or tc.get("#attributes", {}).get("SystemTime")
+            or "?"
+        )
+
+    # EventID may be an int, a string, or a dict
+    eid = system.get("EventID", "?")
     if isinstance(eid, dict):
-        eid = eid.get("#text", "?")
+        eid = eid.get("#text") or eid.get("@text") or str(eid)
+
     computer = system.get("Computer", "?")
-    user = system.get("Security", {}).get("@UserID", "?")
-    return f"[{ts}] EventID={eid} Computer={computer} User={user}"
+    return f"[{ts}] EventID={eid} Computer={computer}"
+
+
+def _format_event_data(hit: dict) -> str:
+    """Return a single-line summary of the most useful EventData fields."""
+    ed = _get_event_data(hit)
+    if not ed:
+        return ""
+
+    # Priority fields for common Windows security events
+    priority = [
+        "TargetUserName", "TargetDomainName", "SubjectUserName",
+        "IpAddress", "WorkstationName", "LogonType",
+        "ServiceName", "ImagePath",
+        "CommandLine", "ParentCommandLine",
+        "ProcessName", "ParentProcessName",
+        "ShareName", "RelativeTargetName",
+        "ObjectName", "AccessMask",
+    ]
+    parts: list[str] = []
+    for key in priority:
+        val = ed.get(key)
+        if val and str(val) not in ("-", "??", "0x0", ""):
+            parts.append(f"{key}={val}")
+
+    # Fall back: show first few non-empty fields not already shown
+    shown_keys = set(priority)
+    for key, val in ed.items():
+        if key in shown_keys:
+            continue
+        if val and str(val) not in ("-", "??", "0x0", ""):
+            parts.append(f"{key}={val}")
+        if len(parts) >= 8:
+            break
+
+    return "  " + "  ".join(parts) if parts else ""

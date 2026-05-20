@@ -15,6 +15,9 @@ from chainsawmcp.report import (
     get_detections,
     _group_by_rule,
     _extract_severity,
+    _format_hit,
+    _format_event_data,
+    _get_event_data,
 )
 
 
@@ -202,6 +205,104 @@ def test_get_detections_no_match():
     hits = [{"name": "Mimikatz", "level": "high"}]
     result = get_detections(hits, rule="nonexistent")
     assert "No hits matched" in result
+
+
+# ---------------------------------------------------------------------------
+# Event field extraction (Chainsaw JSON structure)
+# ---------------------------------------------------------------------------
+
+# Minimal hit in the shape Chainsaw actually emits: document.Event.System / .EventData
+_RDP_HIT = {
+    "name": "Remote Interactive Logon",
+    "level": "critical",
+    "timestamp": "2018-08-31T12:34:56.000Z",
+    "document": {
+        "Event": {
+            "System": {
+                "EventID": 4624,
+                "Computer": "DC01.corp.local",
+                "TimeCreated": {"SystemTime": "2018-08-31T12:34:56.000Z"},
+            },
+            "EventData": {
+                "TargetUserName": "Administrator",
+                "TargetDomainName": "CORP",
+                "IpAddress": "10.10.10.50",
+                "WorkstationName": "ATTACKER-PC",
+                "LogonType": 10,
+            },
+        }
+    },
+}
+
+
+def test_format_hit_extracts_eventid_and_computer():
+    line = _format_hit(_RDP_HIT)
+    assert "EventID=4624" in line
+    assert "Computer=DC01.corp.local" in line
+    assert "2018-08-31" in line
+
+
+def test_format_hit_uses_toplevel_timestamp():
+    """Top-level timestamp must be preferred over nested TimeCreated."""
+    hit = dict(_RDP_HIT)
+    hit["timestamp"] = "2018-09-05T08:00:00.000Z"
+    line = _format_hit(hit)
+    assert "2018-09-05" in line
+
+
+def test_get_event_data_flat():
+    ed = _get_event_data(_RDP_HIT)
+    assert ed["TargetUserName"] == "Administrator"
+    assert ed["IpAddress"] == "10.10.10.50"
+    assert ed["LogonType"] == 10
+
+
+def test_get_event_data_list_format():
+    """EventData.Data as a list of {#attributes: {Name:...}, #text:...} objects."""
+    hit = {
+        "document": {
+            "Event": {
+                "System": {},
+                "EventData": {
+                    "Data": [
+                        {"#attributes": {"Name": "TargetUserName"}, "#text": "jdoe"},
+                        {"#attributes": {"Name": "IpAddress"}, "#text": "192.168.1.1"},
+                    ]
+                },
+            }
+        }
+    }
+    ed = _get_event_data(hit)
+    assert ed["TargetUserName"] == "jdoe"
+    assert ed["IpAddress"] == "192.168.1.1"
+
+
+def test_format_event_data_shows_priority_fields():
+    line = _format_event_data(_RDP_HIT)
+    assert "TargetUserName=Administrator" in line
+    assert "IpAddress=10.10.10.50" in line
+    assert "WorkstationName=ATTACKER-PC" in line
+
+
+def test_format_event_data_suppresses_dashes():
+    """Fields with value '-' (Chainsaw's null sentinel) must be omitted."""
+    hit = {
+        "document": {
+            "Event": {
+                "System": {},
+                "EventData": {"IpAddress": "-", "TargetUserName": "jdoe"},
+            }
+        }
+    }
+    line = _format_event_data(hit)
+    assert "IpAddress" not in line
+    assert "TargetUserName=jdoe" in line
+
+
+def test_get_detections_shows_event_data():
+    result = get_detections([_RDP_HIT])
+    assert "TargetUserName=Administrator" in result
+    assert "IpAddress=10.10.10.50" in result
 
 
 # ---------------------------------------------------------------------------
