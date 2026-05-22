@@ -10,7 +10,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent, Tool
 
 from .chainsaw import ChainsawError, HuntResult, run_hunt_async
-from .config import get_output_dir
+from .config import get_http_host, get_http_port, get_output_dir
 from .evidence import EvidenceError, PreparedEvidence, prepare_evidence
 from .report import format_summary, get_detections, write_full_report
 
@@ -352,11 +352,48 @@ def _error(text: str) -> CallToolResult:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser(prog="chainsawmcp")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http"],
+        default="stdio",
+        help="Transport to use. 'streamable-http' exposes an HTTP endpoint for OpenWebUI. (default: stdio)",
+    )
+    args = parser.parse_args()
+
+    if args.transport == "streamable-http":
+        _run_http()
+    else:
+        _run_stdio()
+
+
+def _run_stdio() -> None:
     async def _run():
         async with stdio_server() as (read_stream, write_stream):
             await app.run(read_stream, write_stream, app.create_initialization_options())
 
     asyncio.run(_run())
+
+
+def _run_http() -> None:
+    import uvicorn
+    from starlette.middleware.cors import CORSMiddleware
+
+    host = get_http_host()
+    port = get_http_port()
+
+    starlette_app = app.streamable_http_app(event_store=None, json_response=False)
+    starlette_app = CORSMiddleware(
+        starlette_app,
+        allow_origins=["*"],
+        allow_methods=["GET", "POST", "DELETE"],
+        expose_headers=["Mcp-Session-Id"],
+    )
+
+    print(f"ChainsawMCP listening on http://{host}:{port}/mcp")
+    print(f"Add this URL to OpenWebUI: Admin → External Tools → Add Server (MCP Streamable HTTP)")
+    uvicorn.run(starlette_app, host=host, port=port)
 
 
 if __name__ == "__main__":

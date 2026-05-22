@@ -62,5 +62,16 @@ def get_batch_size() -> int:
         return 20
 
 
+def get_http_host() -> str:
+    return os.environ.get("CHAINSAWMCP_HOST", "127.0.0.1")
+
+
+def get_http_port() -> int:
+    try:
+        return int(os.environ.get("CHAINSAWMCP_PORT", "8000"))
+    except ValueError:
+        return 8000
+
+
 def is_windows() -> bool:
     return platform.system() == "Windows"
