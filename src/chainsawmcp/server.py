@@ -393,6 +393,10 @@ def _run_http() -> None:
 
     print(f"ChainsawMCP listening on http://{host}:{port}/mcp")
     print(f"Add this URL to OpenWebUI: Admin → External Tools → Add Server (MCP Streamable HTTP)")
+    if is_windows():
+        print(f"  To change host/port (PowerShell): $env:CHAINSAWMCP_HOST='0.0.0.0'; $env:CHAINSAWMCP_PORT='8000'")
+    else:
+        print(f"  To change host/port: CHAINSAWMCP_HOST=0.0.0.0 CHAINSAWMCP_PORT=8000 chainsawmcp --transport streamable-http")
     uvicorn.run(starlette_app, host=host, port=port)
 
 
