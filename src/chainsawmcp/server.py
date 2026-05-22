@@ -377,13 +377,33 @@ def _run_stdio() -> None:
 
 
 def _run_http() -> None:
+    import contextlib
+    from collections.abc import AsyncIterator
+
     import uvicorn
+    from starlette.applications import Starlette
     from starlette.middleware.cors import CORSMiddleware
+    from starlette.routing import Mount
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
     host = get_http_host()
     port = get_http_port()
 
-    starlette_app = app.streamable_http_app(event_store=None, json_response=False)
+    session_manager = StreamableHTTPSessionManager(
+        app=app,
+        event_store=None,
+        json_response=False,
+    )
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
+        async with session_manager.run():
+            yield
+
+    starlette_app = Starlette(
+        lifespan=lifespan,
+        routes=[Mount("/mcp", app=session_manager.handle_request)],
+    )
     starlette_app = CORSMiddleware(
         starlette_app,
         allow_origins=["*"],
@@ -392,7 +412,11 @@ def _run_http() -> None:
     )
 
     print(f"ChainsawMCP listening on http://{host}:{port}/mcp")
-    print(f"Add this URL to OpenWebUI: Admin → External Tools → Add Server (MCP Streamable HTTP)")
+    print("Add this URL to OpenWebUI: Admin → External Tools → Add Server (MCP Streamable HTTP)")
+    if is_windows():
+        print("  To change host/port (PowerShell): $env:CHAINSAWMCP_HOST='0.0.0.0'; $env:CHAINSAWMCP_PORT='8000'")
+    else:
+        print("  To change host/port: CHAINSAWMCP_HOST=0.0.0.0 CHAINSAWMCP_PORT=8000 chainsawmcp --transport streamable-http")
     uvicorn.run(starlette_app, host=host, port=port)
 
 
