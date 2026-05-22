@@ -10,7 +10,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent, Tool
 
 from .chainsaw import ChainsawError, HuntResult, run_hunt_async
-from .config import get_http_host, get_http_port, get_output_dir
+from .config import get_http_host, get_http_port, get_output_dir, is_windows
 from .evidence import EvidenceError, PreparedEvidence, prepare_evidence
 from .report import format_summary, get_detections, write_full_report
 
