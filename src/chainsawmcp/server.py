@@ -417,6 +417,14 @@ def _run_http() -> None:
         print("  To change host/port (PowerShell): $env:CHAINSAWMCP_HOST='0.0.0.0'; $env:CHAINSAWMCP_PORT='8000'")
     else:
         print("  To change host/port: CHAINSAWMCP_HOST=0.0.0.0 CHAINSAWMCP_PORT=8000 chainsawmcp --transport streamable-http")
+
+    # Windows proactor event loop raises ConnectionResetError when the remote
+    # closes an SSE connection, which is normal OpenWebUI behaviour. The selector
+    # loop handles this cleanly.
+    if is_windows():
+        import asyncio
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
     uvicorn.run(starlette_app, host=host, port=port)
 
 
