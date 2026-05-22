@@ -402,7 +402,7 @@ def _run_http() -> None:
 
     starlette_app = Starlette(
         lifespan=lifespan,
-        routes=[Mount("/", app=session_manager.handle_request)],
+        routes=[Mount("/mcp", app=session_manager.handle_request)],
     )
     starlette_app = CORSMiddleware(
         starlette_app,
@@ -411,13 +411,20 @@ def _run_http() -> None:
         expose_headers=["Mcp-Session-Id"],
     )
 
-    print(f"ChainsawMCP listening on http://{host}:{port}")
-    print(f"Add this URL to OpenWebUI: Admin → External Tools → Add Server (MCP Streamable HTTP)")
-    print(f"  URL to enter: http://<this-machine-ip>:{port}")
+    print(f"ChainsawMCP listening on http://{host}:{port}/mcp")
+    print("Add this URL to OpenWebUI: Admin → External Tools → Add Server (MCP Streamable HTTP)")
     if is_windows():
         print("  To change host/port (PowerShell): $env:CHAINSAWMCP_HOST='0.0.0.0'; $env:CHAINSAWMCP_PORT='8000'")
     else:
         print("  To change host/port: CHAINSAWMCP_HOST=0.0.0.0 CHAINSAWMCP_PORT=8000 chainsawmcp --transport streamable-http")
+
+    # Windows proactor event loop raises ConnectionResetError when the remote
+    # closes an SSE connection, which is normal OpenWebUI behaviour. The selector
+    # loop handles this cleanly.
+    if is_windows():
+        import asyncio
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
     uvicorn.run(starlette_app, host=host, port=port)
 
 
