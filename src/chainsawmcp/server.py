@@ -61,8 +61,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="chainsaw_hunt",
             description=(
-                "Start a Chainsaw hunt against staged EVTXs in the background. "
-                "Returns immediately — call hunt_status to poll for completion."
+                "Run a Chainsaw hunt against staged EVTXs. Blocks until the hunt completes "
+                "and returns a summary of hits grouped by rule. Call chainsaw_report afterwards "
+                "for the full severity breakdown."
             ),
             inputSchema={
                 "type": "object",
@@ -91,8 +92,8 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="hunt_status",
             description=(
-                "Check the status of a running or completed Chainsaw hunt. "
-                "Poll this after calling chainsaw_hunt until status is 'done' or 'error'."
+                "Check the status of the most recent Chainsaw hunt. "
+                "Useful if chainsaw_hunt was interrupted or to confirm completion."
             ),
             inputSchema={
                 "type": "object",
@@ -228,26 +229,28 @@ async def _chainsaw_hunt(args: dict) -> CallToolResult:
     state.hunt_finished_at = None
     state.hunt_error = ""
 
-    async def _run() -> None:
-        try:
-            result: HuntResult = await run_hunt_async(
-                evtx_dir, rules_path=rules, sigma_path=sigma,
-                mapping_path=mapping, extra_args=extra,
-            )
-            state.hits = result.hits
-            state.output_file = str(result.output_file) if result.output_file else ""
-            state.hunt_status = "done"
-        except ChainsawError as exc:
-            state.hunt_error = str(exc)
-            state.hunt_status = "error"
-        finally:
-            state.hunt_finished_at = time.time()
+    try:
+        result: HuntResult = await run_hunt_async(
+            evtx_dir, rules_path=rules, sigma_path=sigma,
+            mapping_path=mapping, extra_args=extra,
+        )
+        state.hits = result.hits
+        state.output_file = str(result.output_file) if result.output_file else ""
+        state.hunt_status = "done"
+    except ChainsawError as exc:
+        state.hunt_error = str(exc)
+        state.hunt_status = "error"
+        state.hunt_finished_at = time.time()
+        return _error(str(exc))
+    finally:
+        state.hunt_finished_at = time.time()
 
-    state._hunt_task = asyncio.create_task(_run())
-
+    elapsed = _fmt_elapsed(state.hunt_finished_at - state.hunt_started_at)
+    summary = _hits_summary(state.hits)
     return _ok(
-        f"Hunt started against {evtx_count} EVTX file(s).\n"
-        "Call hunt_status to check progress."
+        f"Hunt complete in {elapsed} — {len(state.hits)} hit(s) found against {evtx_count} EVTX file(s).\n\n"
+        f"{summary}\n\n"
+        "Call chainsaw_report for a full summary with severity breakdown."
     )
 
 
