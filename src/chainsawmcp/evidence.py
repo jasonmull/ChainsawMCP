@@ -1,5 +1,6 @@
 """Evidence preparation: validate EVTX directories and mount E01 images."""
 
+import glob as _glob
 import shutil
 import subprocess
 import tempfile
@@ -13,16 +14,39 @@ class EvidenceError(Exception):
 
 
 class PreparedEvidence:
-    """Holds the staged EVTX directory and cleanup state for a session."""
+    """Holds staged EVTX directory and all cleanup state for one session."""
 
-    def __init__(self, evtx_dir: Path, _mount_point: Path | None = None, _temp_dir: Path | None = None):
+    def __init__(
+        self,
+        evtx_dir: Path,
+        _ewf_mount: Path | None = None,
+        _ntfs_mount: Path | None = None,
+        _loop_device: str | None = None,
+        _aim_drive: str | None = None,
+        _temp_dir: Path | None = None,
+    ):
         self.evtx_dir = evtx_dir
-        self._mount_point = _mount_point
+        self._ewf_mount = _ewf_mount
+        self._ntfs_mount = _ntfs_mount
+        self._loop_device = _loop_device
+        self._aim_drive = _aim_drive
         self._temp_dir = _temp_dir
 
     def cleanup(self) -> None:
-        if self._mount_point and self._mount_point.exists():
-            _unmount(self._mount_point)
+        # Tear down in reverse mount order: NTFS → loop device → EWF → temp dir
+        if self._ntfs_mount and self._ntfs_mount.exists():
+            subprocess.run(["umount", str(self._ntfs_mount)], capture_output=True)
+        if self._loop_device:
+            subprocess.run(["losetup", "-d", self._loop_device], capture_output=True)
+        if self._ewf_mount and self._ewf_mount.exists():
+            subprocess.run(["umount", str(self._ewf_mount)], capture_output=True)
+        if self._aim_drive:
+            aim = _find_aim_cli()
+            if aim:
+                subprocess.run(
+                    [str(aim), "/unmount", f"/drive={self._aim_drive}"],
+                    capture_output=True,
+                )
         if self._temp_dir and self._temp_dir.exists():
             shutil.rmtree(self._temp_dir, ignore_errors=True)
 
@@ -76,66 +100,130 @@ def _prepare_e01_linux(first_segment: Path) -> PreparedEvidence:
     ntfs_mount.mkdir()
     evtx_stage.mkdir()
 
+    loop_device: str | None = None
+
     try:
         _run(["ewfmount", str(first_segment), str(ewf_mount)])
         raw_image = ewf_mount / "ewf1"
-        _run(["ntfs-3g", "-o", "ro,noatime", str(raw_image), str(ntfs_mount)])
+
+        # Real disk images have a partition table; expose partitions via losetup
+        # and find the Windows NTFS volume. Fall back to direct mount if losetup
+        # is unavailable (e.g. raw NTFS image without a partition table).
+        loop_device, ntfs_dev = _find_windows_ntfs_partition(raw_image)
+        mount_target = ntfs_dev if ntfs_dev else str(raw_image)
+        _run(["ntfs-3g", "-o", "ro,noatime", mount_target, str(ntfs_mount)])
+
         _copy_evtx_files(ntfs_mount, evtx_stage)
     except Exception:
-        _unmount(ntfs_mount)
-        _unmount(ewf_mount)
+        subprocess.run(["umount", str(ntfs_mount)], capture_output=True)
+        if loop_device:
+            subprocess.run(["losetup", "-d", loop_device], capture_output=True)
+        subprocess.run(["umount", str(ewf_mount)], capture_output=True)
         shutil.rmtree(tmp, ignore_errors=True)
         raise
 
-    return PreparedEvidence(evtx_dir=evtx_stage, _mount_point=ntfs_mount, _temp_dir=tmp)
+    return PreparedEvidence(
+        evtx_dir=evtx_stage,
+        _ewf_mount=ewf_mount,
+        _ntfs_mount=ntfs_mount,
+        _loop_device=loop_device,
+        _temp_dir=tmp,
+    )
+
+
+def _find_windows_ntfs_partition(raw_image: Path) -> tuple[str | None, str | None]:
+    """
+    Attach raw_image as a loop device with partition scanning and return the
+    most likely Windows NTFS volume: (loop_device_path, partition_device_path).
+    Returns (None, None) if losetup is unavailable or no NTFS partition found.
+    """
+    if not shutil.which("losetup"):
+        return None, None
+
+    try:
+        result = subprocess.run(
+            ["losetup", "--show", "-f", "-P", str(raw_image)],
+            capture_output=True, text=True, check=True,
+        )
+        loop_dev = result.stdout.strip()  # e.g. /dev/loop5
+    except subprocess.CalledProcessError:
+        return None, None
+
+    partition_devs = sorted(_glob.glob(f"{loop_dev}p*"))
+
+    ntfs_partitions = [p for p in partition_devs if _is_ntfs(p)]
+
+    if not ntfs_partitions:
+        subprocess.run(["losetup", "-d", loop_dev], capture_output=True)
+        return None, None
+
+    # Prefer the largest NTFS partition — System Reserved is tiny compared to
+    # the main Windows volume.
+    best = max(ntfs_partitions, key=_partition_size_bytes)
+    return loop_dev, best
+
+
+def _is_ntfs(device: str) -> bool:
+    """Return True if blkid identifies the device filesystem as NTFS."""
+    if not shutil.which("blkid"):
+        return False
+    r = subprocess.run(
+        ["blkid", "-o", "value", "-s", "TYPE", device],
+        capture_output=True, text=True,
+    )
+    return "ntfs" in r.stdout.lower()
+
+
+def _partition_size_bytes(device: str) -> int:
+    """Return block device size in bytes via blockdev, or 0 on failure."""
+    try:
+        r = subprocess.run(
+            ["blockdev", "--getsize64", device],
+            capture_output=True, text=True, check=True,
+        )
+        return int(r.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError):
+        return 0
 
 
 def _prepare_e01_windows(first_segment: Path) -> PreparedEvidence:
     aim = _find_aim_cli()
     if not aim:
-        raise EvidenceError("Arsenal Image Mounter (aim_cli.exe) not found. Add it to PATH or set AIM_CLI env var.")
+        raise EvidenceError(
+            "Arsenal Image Mounter (aim_cli.exe) not found. Add it to PATH or set AIM_CLI env var."
+        )
 
     tmp = Path(tempfile.mkdtemp(prefix="chainsawmcp_"))
     evtx_stage = tmp / "evtx"
     evtx_stage.mkdir()
 
-    import string, random
     drive = _pick_free_drive()
     try:
         _run([str(aim), "/mount", f"/filename={first_segment}", f"/drive={drive}", "/readonly"])
         mounted = Path(f"{drive}:\\")
         _copy_evtx_files(mounted, evtx_stage)
     except Exception:
-        _run([str(aim), "/unmount", f"/drive={drive}"], check=False)
+        subprocess.run([str(aim), "/unmount", f"/drive={drive}"], capture_output=True)
         shutil.rmtree(tmp, ignore_errors=True)
         raise
 
-    # Store drive letter so cleanup can unmount
-    mount_marker = tmp / ".aim_drive"
-    mount_marker.write_text(drive)
-    return PreparedEvidence(evtx_dir=evtx_stage, _mount_point=tmp / ".aim_mount", _temp_dir=tmp)
+    return PreparedEvidence(evtx_dir=evtx_stage, _aim_drive=drive, _temp_dir=tmp)
 
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
 
 def _copy_evtx_files(source_root: Path, dest: Path) -> None:
     copied = 0
     for evtx in source_root.rglob("*.evtx"):
         target = dest / evtx.name
-        # Avoid name collisions by appending a counter
         if target.exists():
             target = dest / f"{evtx.stem}_{copied}{evtx.suffix}"
         shutil.copy2(evtx, target)
         copied += 1
     if copied == 0:
         raise EvidenceError(f"No .evtx files found in mounted image under {source_root}")
-
-
-def _unmount(mount_point: Path) -> None:
-    if not mount_point.exists():
-        return
-    if is_windows():
-        _run(["umount", str(mount_point)], check=False)
-    else:
-        _run(["umount", str(mount_point)], check=False)
 
 
 def _run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
@@ -153,7 +241,8 @@ def _require_tool(name: str, package_hint: str) -> None:
 
 
 def _find_aim_cli() -> Path | None:
-    override = __import__("os").environ.get("AIM_CLI")
+    import os
+    override = os.environ.get("AIM_CLI")
     if override:
         return Path(override)
     found = shutil.which("aim_cli.exe")
@@ -162,8 +251,7 @@ def _find_aim_cli() -> Path | None:
 
 def _pick_free_drive() -> str:
     import string
-    used = {p.drive.rstrip("\\:").upper() for p in Path(".").parent.glob("*") if p.drive}
     for letter in reversed(string.ascii_uppercase):
-        if letter not in used:
+        if not Path(f"{letter}:\\").exists():
             return letter
     raise EvidenceError("No free drive letter available for mounting.")

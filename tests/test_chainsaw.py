@@ -1,6 +1,7 @@
 """Tests for ChainsawMCP components."""
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -8,7 +9,15 @@ import pytest
 
 from chainsawmcp.chainsaw import ChainsawError, HuntResult, _parse_output, run_hunt
 from chainsawmcp.config import get_batch_size, get_ollama_base_url, get_ollama_model
-from chainsawmcp.evidence import EvidenceError, PreparedEvidence, _prepare_evtx_dir
+from chainsawmcp.evidence import (
+    EvidenceError,
+    PreparedEvidence,
+    _find_windows_ntfs_partition,
+    _is_ntfs,
+    _partition_size_bytes,
+    _prepare_evtx_dir,
+    _prepare_e01_linux,
+)
 from chainsawmcp.report import (
     format_full_report,
     format_summary,
@@ -105,6 +114,201 @@ def test_prepare_evidence_unknown_extension(tmp_path):
 
 def test_prepared_evidence_cleanup_noop():
     PreparedEvidence(evtx_dir=Path("/tmp")).cleanup()
+
+
+def test_prepared_evidence_cleanup_calls_umount_in_order(tmp_path):
+    """Cleanup must unmount NTFS before the loop device before EWF."""
+    ntfs_mount = tmp_path / "ntfs"
+    ewf_mount = tmp_path / "ewf"
+    ntfs_mount.mkdir()
+    ewf_mount.mkdir()
+
+    call_log = []
+
+    def fake_run(cmd, **_kwargs):
+        call_log.append(cmd[0] if cmd[0] != "losetup" else f"losetup {cmd[1]}")
+
+    with patch("chainsawmcp.evidence.subprocess.run", side_effect=fake_run):
+        PreparedEvidence(
+            evtx_dir=tmp_path / "evtx",
+            _ewf_mount=ewf_mount,
+            _ntfs_mount=ntfs_mount,
+            _loop_device="/dev/loop9",
+            _temp_dir=tmp_path,
+        ).cleanup()
+
+    assert call_log[0] == "umount"        # NTFS first
+    assert call_log[1] == "losetup -d"    # then loop device
+    assert call_log[2] == "umount"        # then EWF
+
+
+# ---------------------------------------------------------------------------
+# E01 partition detection
+# ---------------------------------------------------------------------------
+
+def test_find_windows_ntfs_partition_no_losetup():
+    with patch("chainsawmcp.evidence.shutil.which", return_value=None):
+        loop, part = _find_windows_ntfs_partition(Path("/fake/ewf1"))
+    assert loop is None and part is None
+
+
+def test_find_windows_ntfs_partition_losetup_fails():
+    with patch("chainsawmcp.evidence.shutil.which", return_value="/usr/sbin/losetup"):
+        with patch("chainsawmcp.evidence.subprocess.run", side_effect=subprocess.CalledProcessError(1, "losetup")):
+            loop, part = _find_windows_ntfs_partition(Path("/fake/ewf1"))
+    assert loop is None and part is None
+
+
+def test_find_windows_ntfs_partition_selects_largest(tmp_path):
+    """When multiple NTFS partitions exist, the largest is returned."""
+    fake_loop = "/dev/loop7"
+
+    def fake_run(cmd, **kwargs):
+        mock = MagicMock()
+        mock.returncode = 0
+        if "losetup" in cmd and "--show" in cmd:
+            mock.stdout = fake_loop + "\n"
+        elif "blkid" in cmd:
+            # All partitions report as ntfs
+            mock.stdout = "ntfs\n"
+        elif "blockdev" in cmd:
+            # p1 = 100 MB, p2 = 50 GB
+            mock.stdout = "104857600\n" if "p1" in cmd[-1] else "53687091200\n"
+        else:
+            mock.stdout = ""
+        return mock
+
+    with patch("chainsawmcp.evidence.subprocess.run", side_effect=fake_run):
+        with patch("chainsawmcp.evidence.shutil.which", return_value="/usr/sbin/losetup"):
+            with patch("chainsawmcp.evidence._glob.glob", return_value=["/dev/loop7p1", "/dev/loop7p2"]):
+                loop, part = _find_windows_ntfs_partition(Path("/fake/ewf1"))
+
+    assert loop == fake_loop
+    assert part == "/dev/loop7p2"
+
+
+def test_find_windows_ntfs_partition_no_ntfs_releases_loop():
+    """If no NTFS partition is found the loop device must be released."""
+    released = []
+    fake_loop = "/dev/loop8"
+
+    def fake_run(cmd, **kwargs):
+        mock = MagicMock()
+        mock.returncode = 0
+        if "losetup" in cmd and "--show" in cmd:
+            mock.stdout = fake_loop + "\n"
+        elif "losetup" in cmd and "-d" in cmd:
+            released.append(cmd[-1])
+        elif "blkid" in cmd:
+            mock.stdout = "ext4\n"  # not NTFS
+        else:
+            mock.stdout = ""
+        return mock
+
+    with patch("chainsawmcp.evidence.subprocess.run", side_effect=fake_run):
+        with patch("chainsawmcp.evidence.shutil.which", return_value="/usr/sbin/losetup"):
+            with patch("chainsawmcp.evidence._glob.glob", return_value=["/dev/loop8p1"]):
+                loop, part = _find_windows_ntfs_partition(Path("/fake/ewf1"))
+
+    assert loop is None and part is None
+    assert fake_loop in released
+
+
+def test_is_ntfs_true():
+    mock = MagicMock()
+    mock.stdout = "ntfs\n"
+    with patch("chainsawmcp.evidence.shutil.which", return_value="/usr/sbin/blkid"):
+        with patch("chainsawmcp.evidence.subprocess.run", return_value=mock):
+            assert _is_ntfs("/dev/loop0p1") is True
+
+
+def test_is_ntfs_false_no_blkid():
+    with patch("chainsawmcp.evidence.shutil.which", return_value=None):
+        assert _is_ntfs("/dev/loop0p1") is False
+
+
+def test_partition_size_bytes_success():
+    mock = MagicMock()
+    mock.stdout = "107374182400\n"
+    with patch("chainsawmcp.evidence.subprocess.run", return_value=mock):
+        assert _partition_size_bytes("/dev/loop0p2") == 107374182400
+
+
+def test_partition_size_bytes_failure():
+    with patch("chainsawmcp.evidence.subprocess.run", side_effect=subprocess.CalledProcessError(1, "blockdev")):
+        assert _partition_size_bytes("/dev/loop0p2") == 0
+
+
+# ---------------------------------------------------------------------------
+# _prepare_e01_linux (mocked subprocess)
+# ---------------------------------------------------------------------------
+
+def test_prepare_e01_linux_happy_path(tmp_path):
+    """Full happy-path: ewfmount → losetup → ntfs-3g → copy evtx."""
+    # Create a fake .evtx in the ntfs_mount directory so _copy_evtx_files succeeds.
+    # We intercept ntfs-3g and write the file into the mount dir ourselves.
+    e01 = tmp_path / "disk.E01"
+    e01.write_bytes(b"")
+
+    run_calls = []
+
+    def fake_run(cmd, **kwargs):
+        run_calls.append(cmd[0])
+        mock = MagicMock()
+        mock.returncode = 0
+        mock.stdout = ""
+        mock.stderr = ""
+        return mock
+
+    # Patch _find_windows_ntfs_partition to skip losetup complexity
+    with patch("chainsawmcp.evidence._find_windows_ntfs_partition", return_value=(None, None)):
+        with patch("chainsawmcp.evidence.shutil.which", return_value="/usr/bin/tool"):
+            with patch("chainsawmcp.evidence._run", side_effect=fake_run):
+                # _copy_evtx_files will fail because the ntfs mount is empty.
+                # Override it to simulate a successful copy.
+                with patch("chainsawmcp.evidence._copy_evtx_files"):
+                    result = _prepare_e01_linux(e01)
+
+    assert result.evtx_dir.name == "evtx"
+    assert result._ewf_mount is not None
+    assert result._ntfs_mount is not None
+    # loop_device is None because _find_windows_ntfs_partition returned (None, None)
+    assert result._loop_device is None
+
+
+def test_prepare_e01_linux_cleans_up_on_failure(tmp_path):
+    """If ntfs-3g fails, ewfmount must also be unmounted and tmp removed."""
+    e01 = tmp_path / "disk.E01"
+    e01.write_bytes(b"")
+
+    unmounted = []
+
+    def fake_run(cmd, capture_output=False, **kwargs):
+        if cmd[0] == "umount":
+            unmounted.append(str(cmd[1]))
+        mock = MagicMock()
+        mock.returncode = 0
+        mock.stdout = ""
+        return mock
+
+    def fake__run(cmd, check=True):
+        if cmd[0] == "ntfs-3g":
+            raise EvidenceError("ntfs-3g failed")
+        mock = MagicMock()
+        mock.returncode = 0
+        mock.stdout = ""
+        mock.stderr = ""
+        return mock
+
+    with patch("chainsawmcp.evidence._find_windows_ntfs_partition", return_value=(None, None)):
+        with patch("chainsawmcp.evidence.shutil.which", return_value="/usr/bin/tool"):
+            with patch("chainsawmcp.evidence._run", side_effect=fake__run):
+                with patch("chainsawmcp.evidence.subprocess.run", side_effect=fake_run):
+                    with pytest.raises(EvidenceError, match="ntfs-3g failed"):
+                        _prepare_e01_linux(e01)
+
+    # Both ntfs_mount and ewf_mount must have been unmounted
+    assert len(unmounted) >= 2
 
 
 # ---------------------------------------------------------------------------
