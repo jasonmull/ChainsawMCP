@@ -86,8 +86,17 @@ def run_hunt(
         raise ChainsawError(f"Chainsaw timed out after {timeout} seconds.")
 
     if result.returncode != 0:
+        # Chainsaw often writes errors to stdout rather than stderr.
+        # Read the output file for the actual message when stderr is empty.
+        detail = (result.stderr or "").strip()
+        if not detail:
+            try:
+                detail = output_file.read_text(encoding="utf-8", errors="replace").strip()[:500]
+            except OSError:
+                pass
         raise ChainsawError(
-            f"Chainsaw exited with code {result.returncode}.\nstderr: {result.stderr}"
+            f"Chainsaw exited with code {result.returncode}."
+            + (f"\n{detail}" if detail else "")
         )
 
     hits = _parse_output_file(output_file)
