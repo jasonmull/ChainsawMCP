@@ -12,11 +12,13 @@ from chainsawmcp.config import get_batch_size, get_ollama_base_url, get_ollama_m
 from chainsawmcp.evidence import (
     EvidenceError,
     PreparedEvidence,
+    _extract_e01_rootless,
     _find_windows_ntfs_partition,
     _is_ntfs,
     _partition_size_bytes,
     _prepare_evtx_dir,
     _prepare_e01_linux,
+    _prepare_e01_linux_fuse,
 )
 from chainsawmcp.report import (
     format_full_report,
@@ -300,15 +302,129 @@ def test_prepare_e01_linux_cleans_up_on_failure(tmp_path):
         mock.stderr = ""
         return mock
 
+    fuse_tmp = tmp_path / "tmp"
+    fuse_tmp.mkdir()
+    (tmp_path / "evtx").mkdir()
+
     with patch("chainsawmcp.evidence._find_windows_ntfs_partition", return_value=(None, None)):
         with patch("chainsawmcp.evidence.shutil.which", return_value="/usr/bin/tool"):
             with patch("chainsawmcp.evidence._run", side_effect=fake__run):
                 with patch("chainsawmcp.evidence.subprocess.run", side_effect=fake_run):
                     with pytest.raises(EvidenceError, match="ntfs-3g failed"):
-                        _prepare_e01_linux(e01)
+                        _prepare_e01_linux_fuse(e01, fuse_tmp, tmp_path / "evtx")
 
     # Both ntfs_mount and ewf_mount must have been unmounted
     assert len(unmounted) >= 2
+
+
+# ---------------------------------------------------------------------------
+# Rootless extraction (_extract_e01_rootless)
+# ---------------------------------------------------------------------------
+
+def test_extract_e01_rootless_missing_libraries(tmp_path):
+    """Should raise ImportError (not EvidenceError) when pytsk3/pyewf are absent."""
+    import builtins
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name in ("pyewf", "pytsk3"):
+            raise ImportError(f"No module named '{name}'")
+        return real_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=fake_import):
+        with pytest.raises(ImportError, match="pytsk3 and pyewf"):
+            _extract_e01_rootless(tmp_path / "disk.E01", tmp_path / "out")
+
+
+def test_extract_e01_rootless_no_evtx_raises(tmp_path):
+    """Should raise EvidenceError when the image contains no .evtx files."""
+    (tmp_path / "out").mkdir()
+
+    # Build minimal mock pytsk3/pyewf objects that report an empty NTFS partition.
+    fake_dir = MagicMock()
+    fake_dir.__iter__ = MagicMock(return_value=iter([]))  # empty directory
+
+    fake_fs = MagicMock()
+    fake_fs.info.ftype = 0x400000  # TSK_FS_TYPE_NTFS
+    fake_fs.open_dir.return_value = fake_dir
+
+    fake_part = MagicMock()
+    fake_part.len = 1_000_000
+    fake_part.start = 2048
+
+    fake_volume = MagicMock()
+    fake_volume.__iter__ = MagicMock(return_value=iter([fake_part]))
+
+    class _FakeImgInfo:
+        def __init__(self, url: str = "") -> None:
+            pass
+
+    fake_pytsk3 = MagicMock()
+    fake_pytsk3.TSK_FS_TYPE_NTFS = 0x400000
+    fake_pytsk3.TSK_FS_TYPE_NTFS_DETECT = 0x400000
+    fake_pytsk3.TSK_FS_META_TYPE_DIR = 2
+    fake_pytsk3.Img_Info = _FakeImgInfo
+    fake_pytsk3.Volume_Info.return_value = fake_volume
+    fake_pytsk3.FS_Info.return_value = fake_fs
+
+    fake_ewf_handle = MagicMock()
+    fake_pyewf = MagicMock()
+    fake_pyewf.glob.return_value = [str(tmp_path / "disk.E01")]
+    fake_pyewf.open.return_value = fake_ewf_handle
+
+    import builtins
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "pyewf":
+            return fake_pyewf
+        if name == "pytsk3":
+            return fake_pytsk3
+        return real_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=fake_import):
+        with pytest.raises(EvidenceError, match="No .evtx files"):
+            _extract_e01_rootless(tmp_path / "disk.E01", tmp_path / "out")
+
+
+def test_prepare_e01_linux_prefers_rootless(tmp_path):
+    """_prepare_e01_linux should use rootless extraction when available."""
+    e01 = tmp_path / "disk.E01"
+    e01.write_bytes(b"")
+
+    with patch("chainsawmcp.evidence._extract_e01_rootless") as mock_rootless:
+        result = _prepare_e01_linux(e01)
+
+    mock_rootless.assert_called_once()
+    # No FUSE mount points should be set
+    assert result._ewf_mount is None
+    assert result._ntfs_mount is None
+    assert result._loop_device is None
+
+
+def test_prepare_e01_linux_falls_back_to_fuse_when_libs_missing(tmp_path):
+    """_prepare_e01_linux should fall back to FUSE when pytsk3/pyewf are absent."""
+    e01 = tmp_path / "disk.E01"
+    e01.write_bytes(b"")
+
+    fake_result = PreparedEvidence(evtx_dir=tmp_path / "evtx", _temp_dir=tmp_path)
+
+    with patch("chainsawmcp.evidence._extract_e01_rootless", side_effect=ImportError("no pytsk3")):
+        with patch("chainsawmcp.evidence._prepare_e01_linux_fuse", return_value=fake_result) as mock_fuse:
+            result = _prepare_e01_linux(e01)
+
+    mock_fuse.assert_called_once()
+    assert result is fake_result
+
+
+def test_prepare_e01_linux_propagates_non_import_errors(tmp_path):
+    """EvidenceError from rootless extraction should propagate — not fall through to FUSE."""
+    e01 = tmp_path / "disk.E01"
+    e01.write_bytes(b"")
+
+    with patch("chainsawmcp.evidence._extract_e01_rootless", side_effect=EvidenceError("bad image")):
+        with pytest.raises(EvidenceError, match="bad image"):
+            _prepare_e01_linux(e01)
 
 
 # ---------------------------------------------------------------------------

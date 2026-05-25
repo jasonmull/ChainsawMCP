@@ -89,16 +89,161 @@ def _prepare_e01(first_segment: Path) -> PreparedEvidence:
 
 
 def _prepare_e01_linux(first_segment: Path) -> PreparedEvidence:
+    tmp = Path(tempfile.mkdtemp(prefix="chainsawmcp_"))
+    evtx_stage = tmp / "evtx"
+    evtx_stage.mkdir()
+
+    # Prefer rootless extraction (pytsk3 + pyewf) — no elevated privileges or
+    # FUSE needed, runs safely in unprivileged containers.
+    try:
+        _extract_e01_rootless(first_segment, evtx_stage)
+        return PreparedEvidence(evtx_dir=evtx_stage, _temp_dir=tmp)
+    except ImportError:
+        pass  # libraries not installed; fall through to FUSE path
+    except Exception:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+
+    # FUSE fallback — requires ewfmount, ntfs-3g, and CAP_SYS_ADMIN / fuse group.
+    return _prepare_e01_linux_fuse(first_segment, tmp, evtx_stage)
+
+
+def _extract_e01_rootless(first_segment: Path, dest: Path) -> None:
+    """
+    Extract EVTX files from an E01 image entirely in-process.
+
+    Uses pyewf to read the Expert Witness Format image and pytsk3 (The Sleuth
+    Kit Python bindings) to parse the NTFS filesystem — no FUSE, no root, no
+    kernel-level mounts.  Raises ImportError if the libraries are not installed.
+    """
+    try:
+        import pyewf   # type: ignore[import-untyped]
+        import pytsk3  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise ImportError(
+            "pytsk3 and pyewf are required for rootless E01 extraction. "
+            "Install with: pip install 'ChainsawMCP[rootless]'"
+        ) from exc
+
+    # pyewf.Img_Info subclass that adapts an open EWF handle for TSK.
+    class _EwfImgInfo(pytsk3.Img_Info):
+        def __init__(self, handle: object) -> None:
+            self._handle = handle
+            super().__init__(url="")
+
+        def close(self) -> None:
+            self._handle.close()
+
+        def read(self, offset: int, size: int) -> bytes:
+            self._handle.seek(offset)
+            return self._handle.read(size)
+
+        def get_size(self) -> int:
+            return self._handle.get_media_size()
+
+    # ---- inner helpers that close over pytsk3 ----
+
+    def _drain_dir(directory: object) -> int:
+        """Copy every .evtx file in an already-opened TSK Directory."""
+        copied = 0
+        for entry in directory:
+            try:
+                raw = entry.info.name.name
+                name = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
+                if not name.lower().endswith(".evtx"):
+                    continue
+                size = entry.info.meta.size
+                if not size:
+                    continue
+                target = dest / name
+                if target.exists():
+                    target = dest / f"{Path(name).stem}_{copied}.evtx"
+                target.write_bytes(entry.read_random(0, size))
+                copied += 1
+            except Exception:
+                continue
+        return copied
+
+    def _walk(directory: object, depth: int = 0) -> int:
+        """Recursively walk a TSK directory tree and extract .evtx files."""
+        if depth > 20:
+            return 0
+        copied = 0
+        for entry in directory:
+            try:
+                raw = entry.info.name.name
+                name = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
+                if name in (".", ".."):
+                    continue
+                meta = entry.info.meta
+                if meta is None:
+                    continue
+                if meta.type == pytsk3.TSK_FS_META_TYPE_DIR:
+                    try:
+                        copied += _walk(entry.as_directory(), depth + 1)
+                    except Exception:
+                        continue
+                elif name.lower().endswith(".evtx") and meta.size:
+                    target = dest / name
+                    if target.exists():
+                        target = dest / f"{Path(name).stem}_{copied}.evtx"
+                    target.write_bytes(entry.read_random(0, meta.size))
+                    copied += 1
+            except Exception:
+                continue
+        return copied
+
+    def _extract_from_fs(fs: object) -> int:
+        """Try the known log path first; fall back to a full-tree walk."""
+        try:
+            return _drain_dir(fs.open_dir(path="/Windows/System32/winevt/Logs"))
+        except OSError:
+            return _walk(fs.open_dir(path="/"))
+
+    # ---- main extraction ----
+
+    # pyewf.glob() resolves multi-segment images (.E01, .E02, …) automatically.
+    segments = pyewf.glob(str(first_segment))
+    ewf_handle = pyewf.open(segments)
+    img = _EwfImgInfo(ewf_handle)
+
+    copied = 0
+    try:
+        volume = pytsk3.Volume_Info(img)
+        for part in volume:
+            # Skip tiny metadata / unallocated entries (< 2048 sectors ≈ 1 MB)
+            if part.len < 2048:
+                continue
+            try:
+                fs = pytsk3.FS_Info(img, offset=part.start * 512)
+            except OSError:
+                continue
+            if fs.info.ftype not in (pytsk3.TSK_FS_TYPE_NTFS, pytsk3.TSK_FS_TYPE_NTFS_DETECT):
+                continue
+            copied += _extract_from_fs(fs)
+            if copied:
+                break  # found EVTXs — no need to scan more partitions
+    except OSError:
+        # No partition table — treat the image as a raw filesystem volume.
+        fs = pytsk3.FS_Info(img)
+        copied = _extract_from_fs(fs)
+
+    if copied == 0:
+        raise EvidenceError("No .evtx files found in E01 image")
+
+
+# ---------------------------------------------------------------------------
+# FUSE path (Linux, requires ewfmount + ntfs-3g + elevated privileges)
+# ---------------------------------------------------------------------------
+
+def _prepare_e01_linux_fuse(first_segment: Path, tmp: Path, evtx_stage: Path) -> PreparedEvidence:
     _require_tool("ewfmount", "ewf-tools package")
     _require_tool("ntfs-3g", "ntfs-3g package")
 
-    tmp = Path(tempfile.mkdtemp(prefix="chainsawmcp_"))
     ewf_mount = tmp / "ewf"
     ntfs_mount = tmp / "ntfs"
-    evtx_stage = tmp / "evtx"
-    ewf_mount.mkdir()
-    ntfs_mount.mkdir()
-    evtx_stage.mkdir()
+    ewf_mount.mkdir(exist_ok=True)
+    ntfs_mount.mkdir(exist_ok=True)
 
     loop_device: str | None = None
 
@@ -185,6 +330,10 @@ def _partition_size_bytes(device: str) -> int:
     except (subprocess.CalledProcessError, ValueError):
         return 0
 
+
+# ---------------------------------------------------------------------------
+# Windows path
+# ---------------------------------------------------------------------------
 
 def _prepare_e01_windows(first_segment: Path) -> PreparedEvidence:
     aim = _find_aim_cli()
