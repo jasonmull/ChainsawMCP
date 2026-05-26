@@ -13,6 +13,8 @@ dependencies = [
     "anyio>=4.0.0",
     "uvicorn>=0.30.0",
     "starlette>=0.40.0",
+    "pytsk3>=20230125",
+    "pyewf>=20201105",
 ]
 
 [project.scripts]

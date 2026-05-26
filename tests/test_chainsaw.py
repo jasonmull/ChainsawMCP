@@ -1,6 +1,7 @@
 """Tests for ChainsawMCP components."""
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -8,7 +9,13 @@ import pytest
 
 from chainsawmcp.chainsaw import ChainsawError, HuntResult, _parse_output, run_hunt
 from chainsawmcp.config import get_batch_size, get_ollama_base_url, get_ollama_model
-from chainsawmcp.evidence import EvidenceError, PreparedEvidence, _prepare_evtx_dir
+from chainsawmcp.evidence import (
+    EvidenceError,
+    PreparedEvidence,
+    _extract_e01_rootless,
+    _prepare_evtx_dir,
+    _prepare_e01_linux,
+)
 from chainsawmcp.report import (
     format_full_report,
     format_summary,
@@ -105,6 +112,136 @@ def test_prepare_evidence_unknown_extension(tmp_path):
 
 def test_prepared_evidence_cleanup_noop():
     PreparedEvidence(evtx_dir=Path("/tmp")).cleanup()
+
+
+def test_prepared_evidence_cleanup_removes_temp_dir(tmp_path):
+    """Cleanup must delete the staging temp directory."""
+    stage = tmp_path / "evtx"
+    stage.mkdir()
+    PreparedEvidence(evtx_dir=stage, _temp_dir=tmp_path).cleanup()
+    assert not tmp_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# E01 rootless extraction (_extract_e01_rootless)
+# ---------------------------------------------------------------------------
+
+def test_extract_e01_rootless_missing_libraries(tmp_path):
+    """Should raise ImportError (not EvidenceError) when pytsk3/pyewf are absent."""
+    import builtins
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name in ("pyewf", "pytsk3"):
+            raise ImportError(f"No module named '{name}'")
+        return real_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=fake_import):
+        with pytest.raises(ImportError):
+            _extract_e01_rootless(tmp_path / "disk.E01", tmp_path / "out")
+
+
+def test_extract_e01_rootless_no_evtx_raises(tmp_path):
+    """Should raise EvidenceError when the image contains no .evtx files."""
+    (tmp_path / "out").mkdir()
+
+    # Build minimal mock pytsk3/pyewf objects that report an empty NTFS partition.
+    fake_dir = MagicMock()
+    fake_dir.__iter__ = MagicMock(return_value=iter([]))
+
+    fake_fs = MagicMock()
+    fake_fs.info.ftype = 0x400000  # TSK_FS_TYPE_NTFS
+    fake_fs.open_dir.return_value = fake_dir
+
+    fake_part = MagicMock()
+    fake_part.len = 1_000_000
+    fake_part.start = 2048
+
+    fake_volume = MagicMock()
+    fake_volume.__iter__ = MagicMock(return_value=iter([fake_part]))
+
+    class _FakeImgInfo:
+        def __init__(self, url: str = "") -> None:
+            pass
+
+    fake_pytsk3 = MagicMock()
+    fake_pytsk3.TSK_FS_TYPE_NTFS = 0x400000
+    fake_pytsk3.TSK_FS_TYPE_NTFS_DETECT = 0x400000
+    fake_pytsk3.TSK_FS_META_TYPE_DIR = 2
+    fake_pytsk3.Img_Info = _FakeImgInfo
+    fake_pytsk3.Volume_Info.return_value = fake_volume
+    fake_pytsk3.FS_Info.return_value = fake_fs
+
+    fake_ewf_handle = MagicMock()
+    fake_pyewf = MagicMock()
+    fake_pyewf.glob.return_value = [str(tmp_path / "disk.E01")]
+    fake_pyewf.open.return_value = fake_ewf_handle
+
+    import builtins
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "pyewf":
+            return fake_pyewf
+        if name == "pytsk3":
+            return fake_pytsk3
+        return real_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=fake_import):
+        with pytest.raises(EvidenceError, match="No .evtx files"):
+            _extract_e01_rootless(tmp_path / "disk.E01", tmp_path / "out")
+
+
+# ---------------------------------------------------------------------------
+# _prepare_e01_linux
+# ---------------------------------------------------------------------------
+
+def test_prepare_e01_linux_happy_path(tmp_path):
+    """Delegates to _extract_e01_rootless and returns PreparedEvidence with temp dir."""
+    e01 = tmp_path / "disk.E01"
+    e01.write_bytes(b"")
+
+    with patch("chainsawmcp.evidence._extract_e01_rootless") as mock_rootless:
+        result = _prepare_e01_linux(e01)
+
+    mock_rootless.assert_called_once()
+    assert result.evtx_dir.name == "evtx"
+    assert result._temp_dir is not None
+
+
+def test_prepare_e01_linux_cleans_up_on_failure(tmp_path):
+    """If rootless extraction fails, the temp directory must be removed."""
+    e01 = tmp_path / "disk.E01"
+    e01.write_bytes(b"")
+
+    import tempfile as _tempfile
+
+    created_tmp: list[Path] = []
+    real_mkdtemp = _tempfile.mkdtemp
+
+    def capturing_mkdtemp(**kwargs):
+        p = real_mkdtemp(**kwargs)
+        created_tmp.append(Path(p))
+        return p
+
+    with patch("chainsawmcp.evidence._extract_e01_rootless", side_effect=EvidenceError("bad image")):
+        with patch("chainsawmcp.evidence.tempfile.mkdtemp", side_effect=capturing_mkdtemp):
+            with pytest.raises(EvidenceError, match="bad image"):
+                _prepare_e01_linux(e01)
+
+    assert created_tmp, "mkdtemp was never called"
+    for p in created_tmp:
+        assert not p.exists(), f"Stale temp dir not cleaned up: {p}"
+
+
+def test_prepare_e01_linux_propagates_errors(tmp_path):
+    """Any exception from rootless extraction propagates unchanged."""
+    e01 = tmp_path / "disk.E01"
+    e01.write_bytes(b"")
+
+    with patch("chainsawmcp.evidence._extract_e01_rootless", side_effect=EvidenceError("corrupt")):
+        with pytest.raises(EvidenceError, match="corrupt"):
+            _prepare_e01_linux(e01)
 
 
 # ---------------------------------------------------------------------------
