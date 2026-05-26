@@ -132,8 +132,8 @@ def test_extract_e01_rootless_missing_libraries(tmp_path):
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
-        if name in ("pyewf", "pytsk3"):
-            raise ImportError(f"No module named '{name}'")
+        if name == "pytsk3":
+            raise ImportError("No module named 'pytsk3'")
         return real_import(name, *args, **kwargs)
 
     with patch("builtins.__import__", side_effect=fake_import):
@@ -145,7 +145,6 @@ def test_extract_e01_rootless_no_evtx_raises(tmp_path):
     """Should raise EvidenceError when the image contains no .evtx files."""
     (tmp_path / "out").mkdir()
 
-    # Build minimal mock pytsk3/pyewf objects that report an empty NTFS partition.
     fake_dir = MagicMock()
     fake_dir.__iter__ = MagicMock(return_value=iter([]))
 
@@ -160,29 +159,18 @@ def test_extract_e01_rootless_no_evtx_raises(tmp_path):
     fake_volume = MagicMock()
     fake_volume.__iter__ = MagicMock(return_value=iter([fake_part]))
 
-    class _FakeImgInfo:
-        def __init__(self, url: str = "") -> None:
-            pass
-
     fake_pytsk3 = MagicMock()
     fake_pytsk3.TSK_FS_TYPE_NTFS = 0x400000
     fake_pytsk3.TSK_FS_TYPE_NTFS_DETECT = 0x400000
     fake_pytsk3.TSK_FS_META_TYPE_DIR = 2
-    fake_pytsk3.Img_Info = _FakeImgInfo
+    fake_pytsk3.Img_Info.return_value = MagicMock()
     fake_pytsk3.Volume_Info.return_value = fake_volume
     fake_pytsk3.FS_Info.return_value = fake_fs
-
-    fake_ewf_handle = MagicMock()
-    fake_pyewf = MagicMock()
-    fake_pyewf.glob.return_value = [str(tmp_path / "disk.E01")]
-    fake_pyewf.open.return_value = fake_ewf_handle
 
     import builtins
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
-        if name == "pyewf":
-            return fake_pyewf
         if name == "pytsk3":
             return fake_pytsk3
         return real_import(name, *args, **kwargs)

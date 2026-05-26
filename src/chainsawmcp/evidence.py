@@ -91,27 +91,31 @@ def _extract_e01_rootless(first_segment: Path, dest: Path) -> None:
     """
     Extract EVTX files from an E01 image entirely in-process.
 
-    Uses pyewf to read the Expert Witness Format image and pytsk3 (The Sleuth
-    Kit Python bindings) to parse the NTFS filesystem — no FUSE, no root, no
-    kernel-level mounts.
+    Uses pytsk3 (The Sleuth Kit Python bindings) to open and parse the image.
+    TSK has native EWF/E01 support — including multi-segment images — when
+    built with libewf (the default for most system-packaged distributions).
+    No FUSE, no root, no kernel-level mounts required.
     """
-    import pyewf   # type: ignore[import-untyped]
-    import pytsk3  # type: ignore[import-untyped]
+    try:
+        import pytsk3  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise ImportError(
+            "pytsk3 is required for E01 extraction. "
+            "Install with: pip install pytsk3\n"
+            "Note: EWF/E01 support requires libtsk to be compiled with libewf. "
+            "System packages (e.g. apt install python3-pytsk3) typically include it."
+        ) from exc
 
-    class _EwfImgInfo(pytsk3.Img_Info):
-        def __init__(self, handle: object) -> None:
-            self._handle = handle
-            super().__init__(url="")
-
-        def close(self) -> None:
-            self._handle.close()
-
-        def read(self, offset: int, size: int) -> bytes:
-            self._handle.seek(offset)
-            return self._handle.read(size)
-
-        def get_size(self) -> int:
-            return self._handle.get_media_size()
+    # TSK opens EWF/E01 files natively and resolves multi-segment images
+    # (.E01, .E02, …) automatically when given the first segment path.
+    try:
+        img = pytsk3.Img_Info(str(first_segment))
+    except OSError as exc:
+        raise EvidenceError(
+            f"Failed to open E01 image '{first_segment}': {exc}\n"
+            "If pytsk3 was not compiled with libewf support, install the system "
+            "package instead: apt install python3-pytsk3 libewf-dev"
+        ) from exc
 
     # ---- inner helpers that close over pytsk3 ----
 
@@ -170,11 +174,6 @@ def _extract_e01_rootless(first_segment: Path, dest: Path) -> None:
             return _walk(fs.open_dir(path="/"))
 
     # ---- main extraction ----
-
-    # pyewf.glob() resolves multi-segment images (.E01, .E02, …) automatically.
-    segments = pyewf.glob(str(first_segment))
-    ewf_handle = pyewf.open(segments)
-    img = _EwfImgInfo(ewf_handle)
 
     copied = 0
     try:
