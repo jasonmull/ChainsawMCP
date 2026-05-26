@@ -62,8 +62,8 @@ async def list_tools() -> list[Tool]:
             name="chainsaw_hunt",
             description=(
                 "Start a Chainsaw hunt against staged EVTXs. Returns immediately — the hunt "
-                "runs in the background. Call hunt_status after 30 seconds to check progress. "
-                "Do NOT poll hunt_status more than once per 30 seconds. "
+                "runs in the background. Call hunt_status after 60 seconds to check progress. "
+                "Do NOT poll hunt_status more than once per 60 seconds. "
                 "Call chainsaw_report once the hunt is done."
             ),
             inputSchema={
@@ -94,7 +94,7 @@ async def list_tools() -> list[Tool]:
             name="hunt_status",
             description=(
                 "Check whether the background Chainsaw hunt is still running or has finished. "
-                "Wait at least 30 seconds between calls — do not poll in a tight loop. "
+                "Wait at least 60 seconds between calls — do not poll in a tight loop. "
                 "When status is 'done', call chainsaw_report for the full results."
             ),
             inputSchema={
@@ -242,8 +242,8 @@ async def _chainsaw_hunt(args: dict) -> CallToolResult:
 
     return _ok(
         f"Hunt started against {evtx_count} EVTX file(s).\n"
-        "Wait 30 seconds, then call hunt_status once to check progress.\n"
-        "Do NOT poll hunt_status more than once per 30 seconds — Chainsaw is "
+        "Wait 60 seconds, then call hunt_status once to check progress.\n"
+        "Do NOT poll hunt_status more than once per 60 seconds — Chainsaw is "
         "CPU-bound and the status will not change faster than that."
     )
 
@@ -283,7 +283,7 @@ async def _hunt_status(_args: dict) -> CallToolResult:
     if status == "running":
         return _ok(
             f"Hunt still running — {elapsed} elapsed.\n"
-            "Wait another 30 seconds before calling hunt_status again."
+            "Wait another 60 seconds before calling hunt_status again."
         )
 
     if status == "done":
