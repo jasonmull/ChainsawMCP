@@ -181,6 +181,8 @@ async def _prepare_evidence(args: dict) -> CallToolResult:
         ev = prepare_evidence(path)
     except EvidenceError as e:
         return _error(str(e))
+    except Exception as e:
+        return _error(f"Unexpected error preparing evidence: {type(e).__name__}: {e}")
 
     state.evidence = ev
     state.hits = []

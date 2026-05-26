@@ -98,9 +98,10 @@ def _extract_e01(first_segment: Path, dest: Path) -> None:
     try:
         _extract_e01_rootless(first_segment, dest)
         return
-    except (ImportError, EvidenceError) as exc:
+    except (ImportError, EvidenceError, OSError) as exc:
         # ImportError  → pytsk3 not installed
-        # EvidenceError → pytsk3 installed but libtsk lacks EWF support
+        # EvidenceError → pytsk3 can't parse the image (EWF not supported, etc.)
+        # OSError      → raw TSK error not wrapped above (belt-and-suspenders)
         pytsk3_exc = exc
 
     if shutil.which("fls") and shutil.which("icat"):
@@ -220,8 +221,11 @@ def _extract_e01_rootless(first_segment: Path, dest: Path) -> None:
             if copied:
                 break
     except OSError:
-        # No partition table — treat the image as a raw filesystem volume.
-        fs = pytsk3.FS_Info(img)
+        # No partition table — image is a raw partition (no MBR/GPT), try offset 0.
+        try:
+            fs = pytsk3.FS_Info(img)
+        except OSError as exc:
+            raise EvidenceError(f"pytsk3 cannot parse filesystem: {exc}") from exc
         copied = _extract_from_fs(fs)
 
     if copied == 0:
