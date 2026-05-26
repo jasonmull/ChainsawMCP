@@ -12,7 +12,10 @@ from chainsawmcp.config import get_batch_size, get_ollama_base_url, get_ollama_m
 from chainsawmcp.evidence import (
     EvidenceError,
     PreparedEvidence,
+    _extract_e01,
     _extract_e01_rootless,
+    _extract_e01_via_tsk_cli,
+    _ntfs_offset_via_mmls,
     _prepare_evtx_dir,
     _prepare_e01_linux,
 )
@@ -198,7 +201,7 @@ def test_prepare_e01_linux_happy_path(tmp_path):
 
 
 def test_prepare_e01_linux_cleans_up_on_failure(tmp_path):
-    """If rootless extraction fails, the temp directory must be removed."""
+    """If all extraction methods fail, the temp directory must be removed."""
     e01 = tmp_path / "disk.E01"
     e01.write_bytes(b"")
 
@@ -212,7 +215,7 @@ def test_prepare_e01_linux_cleans_up_on_failure(tmp_path):
         created_tmp.append(Path(p))
         return p
 
-    with patch("chainsawmcp.evidence._extract_e01_rootless", side_effect=EvidenceError("bad image")):
+    with patch("chainsawmcp.evidence._extract_e01", side_effect=EvidenceError("bad image")):
         with patch("chainsawmcp.evidence.tempfile.mkdtemp", side_effect=capturing_mkdtemp):
             with pytest.raises(EvidenceError, match="bad image"):
                 _prepare_e01_linux(e01)
@@ -222,14 +225,132 @@ def test_prepare_e01_linux_cleans_up_on_failure(tmp_path):
         assert not p.exists(), f"Stale temp dir not cleaned up: {p}"
 
 
-def test_prepare_e01_linux_propagates_errors(tmp_path):
-    """Any exception from rootless extraction propagates unchanged."""
+# ---------------------------------------------------------------------------
+# _extract_e01 fallback chain
+# ---------------------------------------------------------------------------
+
+def test_extract_e01_uses_pytsk3_when_available(tmp_path):
+    """Should use pytsk3 path when it succeeds."""
+    dest = tmp_path / "out"
+    dest.mkdir()
+    with patch("chainsawmcp.evidence._extract_e01_rootless") as mock_rootless:
+        _extract_e01(tmp_path / "disk.E01", dest)
+    mock_rootless.assert_called_once()
+
+
+def test_extract_e01_falls_back_to_cli_on_import_error(tmp_path):
+    """ImportError from pytsk3 should trigger CLI fallback."""
+    dest = tmp_path / "out"
+    dest.mkdir()
+    with patch("chainsawmcp.evidence._extract_e01_rootless", side_effect=ImportError("no pytsk3")):
+        with patch("chainsawmcp.evidence.shutil.which", return_value="/usr/bin/fls"):
+            with patch("chainsawmcp.evidence._extract_e01_via_tsk_cli") as mock_cli:
+                _extract_e01(tmp_path / "disk.E01", dest)
+    mock_cli.assert_called_once()
+
+
+def test_extract_e01_falls_back_to_cli_on_evidence_error(tmp_path):
+    """EvidenceError (e.g. EWF not in libtsk) should also trigger CLI fallback."""
+    dest = tmp_path / "out"
+    dest.mkdir()
+    with patch("chainsawmcp.evidence._extract_e01_rootless", side_effect=EvidenceError("EWF not supported")):
+        with patch("chainsawmcp.evidence.shutil.which", return_value="/usr/bin/fls"):
+            with patch("chainsawmcp.evidence._extract_e01_via_tsk_cli") as mock_cli:
+                _extract_e01(tmp_path / "disk.E01", dest)
+    mock_cli.assert_called_once()
+
+
+def test_extract_e01_raises_when_all_methods_unavailable(tmp_path):
+    """Should raise EvidenceError with helpful message when pytsk3 and CLI both unavailable."""
+    dest = tmp_path / "out"
+    dest.mkdir()
+    with patch("chainsawmcp.evidence._extract_e01_rootless", side_effect=ImportError("no pytsk3")):
+        with patch("chainsawmcp.evidence.shutil.which", return_value=None):
+            with pytest.raises(EvidenceError, match="apt install sleuthkit"):
+                _extract_e01(tmp_path / "disk.E01", dest)
+
+
+# ---------------------------------------------------------------------------
+# _extract_e01_via_tsk_cli
+# ---------------------------------------------------------------------------
+
+def test_tsk_cli_extracts_evtx(tmp_path):
+    """fls output referencing .evtx files should be extracted via icat."""
+    dest = tmp_path / "out"
+    dest.mkdir()
     e01 = tmp_path / "disk.E01"
     e01.write_bytes(b"")
 
-    with patch("chainsawmcp.evidence._extract_e01_rootless", side_effect=EvidenceError("corrupt")):
-        with pytest.raises(EvidenceError, match="corrupt"):
-            _prepare_e01_linux(e01)
+    fls_output = (
+        "r/r 12345-128-1:\tWindows/System32/winevt/Logs/Security.evtx\n"
+        "r/r 12346-128-1:\tWindows/System32/winevt/Logs/System.evtx\n"
+        "d/d 100:\tWindows\n"
+    )
+
+    def fake_run(cmd, **kwargs):
+        mock = MagicMock()
+        if cmd[0] == "fls":
+            mock.returncode = 0
+            mock.stdout = fls_output
+            mock.stderr = ""
+        elif cmd[0] == "icat":
+            mock.returncode = 0
+            mock.stdout = b"\x00ELF_EVTX_FAKE_CONTENT"
+        elif cmd[0] == "mmls":
+            mock.returncode = 0
+            mock.stdout = "000:  -------   0000000000   0000002047   0000002048   Unallocated\n"
+            mock.stdout += "001:  000:000   0000002048   0002099199   0002097152   NTFS / exFAT (0x07)\n"
+        return mock
+
+    with patch("chainsawmcp.evidence.subprocess.run", side_effect=fake_run):
+        with patch("chainsawmcp.evidence.shutil.which", return_value="/usr/bin/mmls"):
+            _extract_e01_via_tsk_cli(e01, dest)
+
+    extracted = list(dest.glob("*.evtx"))
+    assert len(extracted) == 2
+
+
+def test_tsk_cli_raises_on_fls_failure(tmp_path):
+    """fls non-zero exit should raise EvidenceError."""
+    dest = tmp_path / "out"
+    dest.mkdir()
+
+    def fake_run(cmd, **kwargs):
+        mock = MagicMock()
+        if cmd[0] == "fls":
+            mock.returncode = 1
+            mock.stdout = ""
+            mock.stderr = "unable to open image"
+        elif cmd[0] == "mmls":
+            mock.returncode = 1
+            mock.stdout = ""
+        return mock
+
+    with patch("chainsawmcp.evidence.subprocess.run", side_effect=fake_run):
+        with patch("chainsawmcp.evidence.shutil.which", return_value=None):
+            with pytest.raises(EvidenceError, match="fls failed"):
+                _extract_e01_via_tsk_cli(tmp_path / "disk.E01", dest)
+
+
+def test_ntfs_offset_via_mmls_picks_largest(tmp_path):
+    """Should return the start sector of the largest NTFS partition."""
+    mmls_out = (
+        "001:  000:000   0000002048   0000206847   0000204800   NTFS / exFAT (0x07)\n"
+        "002:  000:001   0000206848   0010485759   0010278912   NTFS / exFAT (0x07)\n"
+    )
+    mock = MagicMock()
+    mock.returncode = 0
+    mock.stdout = mmls_out
+    with patch("chainsawmcp.evidence.shutil.which", return_value="/usr/bin/mmls"):
+        with patch("chainsawmcp.evidence.subprocess.run", return_value=mock):
+            offset = _ntfs_offset_via_mmls(tmp_path / "disk.E01")
+    assert offset == 206848  # start of the larger partition
+
+
+def test_ntfs_offset_via_mmls_no_mmls(tmp_path):
+    """Returns None when mmls is not installed."""
+    with patch("chainsawmcp.evidence.shutil.which", return_value=None):
+        assert _ntfs_offset_via_mmls(tmp_path / "disk.E01") is None
 
 
 # ---------------------------------------------------------------------------

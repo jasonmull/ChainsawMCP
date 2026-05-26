@@ -1,5 +1,6 @@
 """Evidence preparation: validate EVTX directories and mount E01 images."""
 
+import re
 import shutil
 import subprocess
 import tempfile
@@ -79,12 +80,39 @@ def _prepare_e01_linux(first_segment: Path) -> PreparedEvidence:
     evtx_stage.mkdir()
 
     try:
-        _extract_e01_rootless(first_segment, evtx_stage)
+        _extract_e01(first_segment, evtx_stage)
     except Exception:
         shutil.rmtree(tmp, ignore_errors=True)
         raise
 
     return PreparedEvidence(evtx_dir=evtx_stage, _temp_dir=tmp)
+
+
+def _extract_e01(first_segment: Path, dest: Path) -> None:
+    """
+    Try pytsk3 Python API first, then fall back to TSK CLI tools (fls/icat).
+    Both approaches are rootless — no FUSE or kernel mounts required.
+    """
+    pytsk3_exc: Exception | None = None
+
+    try:
+        _extract_e01_rootless(first_segment, dest)
+        return
+    except (ImportError, EvidenceError) as exc:
+        # ImportError  → pytsk3 not installed
+        # EvidenceError → pytsk3 installed but libtsk lacks EWF support
+        pytsk3_exc = exc
+
+    if shutil.which("fls") and shutil.which("icat"):
+        _extract_e01_via_tsk_cli(first_segment, dest)
+        return
+
+    raise EvidenceError(
+        f"Cannot extract E01 image — all methods failed.\n"
+        f"  pytsk3: {pytsk3_exc}\n"
+        "Install TSK CLI tools: apt install sleuthkit\n"
+        "Or install pytsk3 with EWF support: apt install python3-pytsk3 libewf-dev"
+    )
 
 
 def _extract_e01_rootless(first_segment: Path, dest: Path) -> None:
@@ -198,6 +226,86 @@ def _extract_e01_rootless(first_segment: Path, dest: Path) -> None:
 
     if copied == 0:
         raise EvidenceError("No .evtx files found in E01 image")
+
+
+# ---------------------------------------------------------------------------
+# TSK CLI fallback  (fls + icat from the sleuthkit package)
+# ---------------------------------------------------------------------------
+
+# fls output:  "r/r 12345-128-1:\tWindows/System32/winevt/Logs/Security.evtx"
+_FLS_RE = re.compile(r"^r/r\s+(\S+):\s+(.*)", re.IGNORECASE)
+# mmls NTFS partition line: leading slot, start, end, length, description
+_MMLS_NTFS_RE = re.compile(r"^\d+:\s+\S+\s+(\d+)\s+\d+\s+(\d+)\s+.*NTFS", re.IGNORECASE)
+
+
+def _extract_e01_via_tsk_cli(first_segment: Path, dest: Path) -> None:
+    """
+    Extract EVTX files using TSK CLI tools (fls + icat).
+
+    Requires the 'sleuthkit' package (apt install sleuthkit), which is
+    always compiled with libewf support on standard distros.  No root needed.
+    """
+    offset = _ntfs_offset_via_mmls(first_segment)
+
+    fls_cmd = ["fls", "-r", "-p"]
+    if offset is not None:
+        fls_cmd += ["-o", str(offset)]
+    fls_cmd.append(str(first_segment))
+
+    fls = subprocess.run(fls_cmd, capture_output=True, text=True)
+    if fls.returncode != 0:
+        raise EvidenceError(
+            f"fls failed on '{first_segment}': {fls.stderr.strip()}\n"
+            "Ensure sleuthkit was compiled with libewf: apt install sleuthkit"
+        )
+
+    copied = 0
+    for line in fls.stdout.splitlines():
+        if ".evtx" not in line.lower():
+            continue
+        m = _FLS_RE.match(line)
+        if not m:
+            continue
+        inode, filepath = m.group(1), m.group(2).strip()
+
+        icat_cmd = ["icat"]
+        if offset is not None:
+            icat_cmd += ["-o", str(offset)]
+        icat_cmd += [str(first_segment), inode]
+
+        data = subprocess.run(icat_cmd, capture_output=True)
+        if data.returncode != 0 or not data.stdout:
+            continue
+
+        target = dest / Path(filepath).name
+        if target.exists():
+            target = dest / f"{Path(filepath).stem}_{copied}.evtx"
+        target.write_bytes(data.stdout)
+        copied += 1
+
+    if copied == 0:
+        raise EvidenceError("No .evtx files found in E01 image via fls/icat")
+
+
+def _ntfs_offset_via_mmls(image: Path) -> int | None:
+    """Return the start sector of the largest NTFS partition, or None."""
+    if not shutil.which("mmls"):
+        return None
+    r = subprocess.run(["mmls", str(image)], capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+
+    best_start: int | None = None
+    best_size = 0
+    for line in r.stdout.splitlines():
+        m = _MMLS_NTFS_RE.match(line)
+        if not m:
+            continue
+        start, size = int(m.group(1)), int(m.group(2))
+        if size > best_size:
+            best_size = size
+            best_start = start
+    return best_start
 
 
 # ---------------------------------------------------------------------------
