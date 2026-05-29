@@ -61,9 +61,10 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="chainsaw_hunt",
             description=(
-                "Run a Chainsaw hunt against staged EVTXs. Blocks until the hunt completes "
-                "and returns a summary of hits grouped by rule. Call chainsaw_report afterwards "
-                "for the full severity breakdown."
+                "Start a Chainsaw hunt against staged EVTXs. Returns immediately — the hunt "
+                "runs in the background. Call hunt_status after 60 seconds to check progress. "
+                "Do NOT poll hunt_status more than once per 60 seconds. "
+                "Call chainsaw_report once the hunt is done."
             ),
             inputSchema={
                 "type": "object",
@@ -92,8 +93,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="hunt_status",
             description=(
-                "Check the status of the most recent Chainsaw hunt. "
-                "Useful if chainsaw_hunt was interrupted or to confirm completion."
+                "Check whether the background Chainsaw hunt is still running or has finished. "
+                "Wait at least 60 seconds between calls — do not poll in a tight loop. "
+                "When status is 'done', call chainsaw_report for the full results."
             ),
             inputSchema={
                 "type": "object",
@@ -231,6 +233,28 @@ async def _chainsaw_hunt(args: dict) -> CallToolResult:
     state.hunt_finished_at = None
     state.hunt_error = ""
 
+    # Run Chainsaw in the background so this call returns immediately.
+    # Large evidence sets can take minutes; awaiting here exhausts the
+    # MCP client's tool-call budget via tight hunt_status polling.
+    state._hunt_task = asyncio.create_task(
+        _run_hunt_background(evtx_dir, rules, sigma, mapping, extra)
+    )
+
+    return _ok(
+        f"Hunt started against {evtx_count} EVTX file(s).\n"
+        "Wait 60 seconds, then call hunt_status once to check progress.\n"
+        "Do NOT poll hunt_status more than once per 60 seconds — Chainsaw is "
+        "CPU-bound and the status will not change faster than that."
+    )
+
+
+async def _run_hunt_background(
+    evtx_dir: Path,
+    rules: "Path | None",
+    sigma: "Path | None",
+    mapping: "Path | None",
+    extra: list,
+) -> None:
     try:
         result: HuntResult = await run_hunt_async(
             evtx_dir, rules_path=rules, sigma_path=sigma,
@@ -242,18 +266,8 @@ async def _chainsaw_hunt(args: dict) -> CallToolResult:
     except ChainsawError as exc:
         state.hunt_error = str(exc)
         state.hunt_status = "error"
-        state.hunt_finished_at = time.time()
-        return _error(str(exc))
     finally:
         state.hunt_finished_at = time.time()
-
-    elapsed = _fmt_elapsed(state.hunt_finished_at - state.hunt_started_at)
-    summary = _hits_summary(state.hits)
-    return _ok(
-        f"Hunt complete in {elapsed} — {len(state.hits)} hit(s) found against {evtx_count} EVTX file(s).\n\n"
-        f"{summary}\n\n"
-        "Call chainsaw_report for a full summary with severity breakdown."
-    )
 
 
 async def _hunt_status(_args: dict) -> CallToolResult:
@@ -267,7 +281,10 @@ async def _hunt_status(_args: dict) -> CallToolResult:
     )
 
     if status == "running":
-        return _ok(f"Hunt running — {elapsed} elapsed. Call hunt_status again to check.")
+        return _ok(
+            f"Hunt still running — {elapsed} elapsed.\n"
+            "Wait another 60 seconds before calling hunt_status again."
+        )
 
     if status == "done":
         summary = _hits_summary(state.hits)
