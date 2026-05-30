@@ -73,6 +73,7 @@ def run_hunt(
                 cmd,
                 stdout=fh,
                 stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,  # prevent stdin contention with MCP stdio transport
                 text=True,
                 timeout=timeout,
             )
@@ -111,7 +112,7 @@ def _build_command(
     extra_args: list[str],
 ) -> list[str]:
     binary = get_chainsaw_binary()
-    cmd = [str(binary), "hunt", str(evtx_dir), "--json"]
+    cmd = [str(binary), "hunt", str(evtx_dir), "--json", "--accept-license", "--no-progress"]
 
     if rules_path:
         cmd += ["--rule", str(rules_path)]
