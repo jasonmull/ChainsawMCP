@@ -55,6 +55,20 @@ def get_output_dir() -> Path:
     return Path(tempfile.gettempdir()) / "chainsawmcp"
 
 
+def get_jobs_dir() -> Path:
+    """Directory where detached hunt job state and results are stored. Override with CHAINSAWMCP_JOBS_DIR."""
+    val = os.environ.get("CHAINSAWMCP_JOBS_DIR")
+    if val:
+        return Path(val)
+    import tempfile
+    return Path(tempfile.gettempdir()) / "chainsawmcp_jobs"
+
+
+def get_webhook_url() -> str | None:
+    """Webhook URL to POST when a detached hunt completes. Set CHAINSAWMCP_WEBHOOK_URL."""
+    return os.environ.get("CHAINSAWMCP_WEBHOOK_URL") or None
+
+
 def get_batch_size() -> int:
     try:
         return int(os.environ.get("ENRICHMENT_BATCH_SIZE", "20"))

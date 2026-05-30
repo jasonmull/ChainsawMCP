@@ -9,9 +9,18 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent, Tool
 
-from .chainsaw import ChainsawError, HuntResult, run_hunt_async
-from .config import get_http_host, get_http_port, get_output_dir, is_windows
+from .chainsaw import ChainsawError, HuntResult, run_hunt_async, spawn_hunt_detached
+from .config import get_http_host, get_http_port, get_jobs_dir, get_output_dir, is_windows
 from .evidence import EvidenceError, PreparedEvidence, prepare_evidence
+from .jobs import (
+    create_job,
+    get_latest_completed_job,
+    is_pid_alive,
+    load_job_results,
+    read_job,
+    results_path,
+    update_job,
+)
 from .report import format_summary, get_detections, write_full_report
 
 app = Server("ChainsawMCP")
@@ -117,6 +126,61 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="start_hunt",
+            description=(
+                "Start a Chainsaw hunt as a fully detached background process. "
+                "Returns immediately — Chainsaw keeps running even if this MCP session closes. "
+                "A webhook POST is sent to CHAINSAWMCP_WEBHOOK_URL when the hunt finishes. "
+                "Call load_hunt_results (with no arguments) once notified, then chainsaw_report. "
+                "Use this instead of chainsaw_hunt for large evidence sets (> 1 GB)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to an EVTX directory or .E01 image file.",
+                    },
+                    "rules_path": {
+                        "type": "string",
+                        "description": "Path to Chainsaw rules directory (overrides CHAINSAW_RULES).",
+                    },
+                    "sigma_path": {
+                        "type": "string",
+                        "description": "Path to Sigma rules directory (overrides CHAINSAW_SIGMA).",
+                    },
+                    "mapping_path": {
+                        "type": "string",
+                        "description": "Path to Sigma mapping file (overrides CHAINSAW_MAPPING). Required when using sigma_path.",
+                    },
+                    "extra_args": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Extra arguments passed verbatim to chainsaw hunt.",
+                    },
+                },
+                "required": ["path"],
+            },
+        ),
+        Tool(
+            name="load_hunt_results",
+            description=(
+                "Load results from a completed detached hunt into the session for analysis. "
+                "If job_id is omitted, loads the most recently completed hunt automatically. "
+                "Call chainsaw_report and get_detections after this."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "Job ID returned by start_hunt. Omit to load the latest completed hunt.",
+                    }
+                },
+                "required": [],
+            },
+        ),
+        Tool(
             name="get_detections",
             description=(
                 "Return individual events from the completed hunt, optionally filtered by rule name "
@@ -153,6 +217,8 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
     handlers = {
         "prepare_evidence": _prepare_evidence,
+        "start_hunt": _start_hunt,
+        "load_hunt_results": _load_hunt_results,
         "chainsaw_hunt": _chainsaw_hunt,
         "hunt_status": _hunt_status,
         "chainsaw_report": _chainsaw_report,
@@ -203,6 +269,141 @@ async def _prepare_evidence(args: dict) -> CallToolResult:
         f"  EVTX files staged: {evtx_count}\n"
         f"  Staging dir: {ev.evtx_dir}\n\n"
         "Next step: call chainsaw_hunt."
+    )
+
+
+async def _start_hunt(args: dict) -> CallToolResult:
+    path = args.get("path", "").strip()
+    if not path:
+        return _error("'path' argument is required.")
+
+    if state.hunt_status == "running":
+        return _error("A hunt is currently running in this session. Wait for it to finish first.")
+
+    # Prepare evidence (handles both EVTX dirs and E01 images)
+    if state.evidence:
+        state.evidence.cleanup()
+    try:
+        ev = prepare_evidence(path)
+    except EvidenceError as e:
+        return _error(str(e))
+    except Exception as e:
+        return _error(f"Unexpected error preparing evidence: {type(e).__name__}: {e}")
+
+    state.evidence = ev
+    state.evidence_path = path
+
+    rules = Path(args["rules_path"]) if args.get("rules_path") else None
+    sigma = Path(args["sigma_path"]) if args.get("sigma_path") else None
+    mapping = Path(args["mapping_path"]) if args.get("mapping_path") else None
+    extra = args.get("extra_args") or []
+
+    evtx_dir = ev.evtx_dir
+    evtx_count = len(list(evtx_dir.rglob("*.evtx")))
+
+    # Create job record on disk before spawning
+    job_id = create_job(evtx_dir)
+    jdir = get_jobs_dir() / job_id
+
+    try:
+        chainsaw_pid, monitor_pid = spawn_hunt_detached(
+            evtx_dir, job_id, jdir,
+            rules_path=rules, sigma_path=sigma,
+            mapping_path=mapping, extra_args=extra,
+        )
+    except ChainsawError as e:
+        update_job(job_id, status="error", error=str(e))
+        return _error(str(e))
+
+    update_job(job_id, pid=chainsaw_pid, monitor_pid=monitor_pid)
+
+    from .config import get_webhook_url
+    webhook_note = (
+        f"\nA webhook POST will be sent to your configured URL when the hunt finishes."
+        if get_webhook_url()
+        else "\nNo webhook configured — set CHAINSAWMCP_WEBHOOK_URL to receive a notification."
+    )
+
+    return _ok(
+        f"Hunt started (job ID: {job_id}).\n"
+        f"  Evidence : {path}\n"
+        f"  EVTX files: {evtx_count}\n"
+        f"  Chainsaw PID: {chainsaw_pid}\n"
+        f"  Results will be written to: {jdir / 'hunt_results.json'}\n"
+        f"{webhook_note}\n\n"
+        "Chainsaw is running as a detached process — this MCP session can be closed.\n"
+        "When the hunt completes, call load_hunt_results() (no arguments needed) to begin analysis."
+    )
+
+
+async def _load_hunt_results(args: dict) -> CallToolResult:
+    job_id = args.get("job_id", "").strip() or None
+
+    if job_id is None:
+        job_id = get_latest_completed_job()
+        if job_id is None:
+            # Check if any job is still running
+            jobs_dir = get_jobs_dir()
+            running = []
+            if jobs_dir.exists():
+                import json as _json
+                for jf in jobs_dir.glob("*/job.json"):
+                    try:
+                        d = _json.loads(jf.read_text(encoding="utf-8"))
+                        if d.get("status") == "running":
+                            running.append(d.get("job_id", "?"))
+                    except Exception:
+                        pass
+            if running:
+                return _error(
+                    f"No completed hunts found. Hunt(s) still running: {', '.join(running)}.\n"
+                    "Wait for the webhook notification, then call load_hunt_results() again."
+                )
+            return _error(
+                "No completed hunt results found. Run start_hunt to begin a hunt."
+            )
+
+    job = read_job(job_id)
+    if job is None:
+        return _error(f"Job '{job_id}' not found in {get_jobs_dir()}.")
+
+    status = job.get("status")
+    if status == "running":
+        # Check if the PID is still alive
+        pid = job.get("pid")
+        if pid and is_pid_alive(pid):
+            return _error(
+                f"Job {job_id} is still running (PID {pid}). "
+                "Wait for the webhook notification, then call load_hunt_results() again."
+            )
+        # PID gone but status not updated — monitor may have been lost; try loading results
+    elif status == "error":
+        return _error(f"Job {job_id} failed: {job.get('error', 'unknown error')}")
+
+    rpath = results_path(job_id)
+    if not rpath.exists() or rpath.stat().st_size == 0:
+        return _error(f"Results file for job {job_id} is empty or missing: {rpath}")
+
+    hits = load_job_results(job_id)
+    state.hits = hits
+    state.output_file = str(rpath)
+    state.hunt_status = "done"
+    state.hunt_started_at = None
+    state.hunt_finished_at = None
+    state.hunt_error = ""
+
+    completed_at = job.get("completed_at", "unknown time")
+    hit_count = len(hits)
+    rules_triggered = job.get("rules_triggered") or len({
+        str(h.get("name") or h.get("rule_name") or (h.get("document") or {}).get("name", ""))
+        for h in hits if h
+    })
+
+    return _ok(
+        f"Loaded {hit_count} hit(s) from job {job_id}.\n"
+        f"  Rules triggered: {rules_triggered}\n"
+        f"  Completed: {completed_at}\n\n"
+        "Call chainsaw_report for a structured summary, or get_detections to drill into specific rules."
     )
 
 
