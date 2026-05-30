@@ -2,51 +2,17 @@
 
 > **Incident response at scale — drop evidence, get answers.**
 
-ChainsawMCP is a [Model Context Protocol](https://modelcontextprotocol.io/) server that bridges [Chainsaw](https://github.com/WithSecureLabs/chainsaw) — WithSecure's fast Windows Event Log threat hunting tool — with AI assistants like Claude. It is built for incident responders who need to analyse large volumes of Windows event logs quickly, without an EDR or SIEM in place.
+ChainsawMCP is a [Model Context Protocol](https://modelcontextprotocol.io/) server that bridges [Chainsaw](https://github.com/WithSecureLabs/chainsaw) — WithSecure's fast Windows Event Log threat hunting tool — with AI assistants. It is built for incident responders who need to analyse large volumes of Windows event logs quickly, without an EDR or SIEM in place.
 
-Point it at a folder of `.evtx` files or a forensic E01 disk image. Chainsaw runs in the background as a fully detached process — no timeouts, no blocking, no tool budget pressure. When the hunt finishes, a webhook fires and your AI assistant loads the results for interactive analysis.
+Because the server makes no LLM calls of its own, it works equally well with **cloud models** (Claude Desktop) and **locally hosted models** (OpenWebUI + Ollama, LM Studio, or any MCP-compatible client) — keeping sensitive evidence off the internet if your engagement requires it.
 
 ---
 
 ## How It Works
 
-```
-  Analyst prompt:
-  "Run a hunt on F:\ChainsawEvals"
-          │
-          ▼
-  ┌───────────────────┐
-  │   start_hunt      │  ← spawns Chainsaw as detached process
-  │   (returns in     │    no MCP session kept alive
-  │    < 1 second)    │    --skip-errors on by default
-  └───────────────────┘
-          │
-          │  [Chainsaw runs independently — minutes to hours]
-          │
-          ▼
-  ┌───────────────────┐
-  │  Webhook fires    │  ← Discord, Slack, or any HTTP endpoint
-  │  "Hunt complete   │    7,098 hits · 74 rules · job f2ef9e2d
-  │   — 7098 hits"    │
-  └───────────────────┘
-          │
-  Analyst returns to Claude:
-  "Analyze the results"
-          │
-          ▼
-  ┌───────────────────┐
-  │ load_hunt_results │  ← instant — reads pre-computed results
-  └───────────────────┘
-          │
-          ▼
-  ┌───────────────────┐
-  │  chainsaw_report  │  ← severity breakdown, top rules
-  │  get_detections   │  ← drill into specific rules or severity
-  │  [follow-up Q&A]  │  ← unlimited interactive analysis
-  └───────────────────┘
-```
+![ChainsawMCP Workflow](assets/workflow.svg)
 
-The MCP server handles evidence preparation and Chainsaw execution. The AI client — Claude Desktop, OpenWebUI, or anything MCP-compatible — provides all the reasoning. The server makes no LLM calls.
+The MCP server handles evidence preparation and Chainsaw execution. The AI client — Claude Desktop, OpenWebUI, LM Studio, or anything MCP-compatible — provides all the reasoning. The server makes no LLM calls.
 
 ---
 
@@ -77,6 +43,7 @@ Automatic report generation was considered and rejected. A one-shot report canno
 - **Split E01 handling** — pass the first segment (`.E01`); multi-segment images resolved automatically
 - **Cross-platform** — full support for Windows and Linux; binary names, mount tools, and process management all handled
 - **Fault-tolerant hunting** — `--skip-errors` is always enabled; a single corrupt log file does not abort the entire hunt
+- **Local LLM support** — works with OpenWebUI, LM Studio, Ollama, and any MCP-compatible client; sensitive evidence never has to leave your network
 - **No server-side LLM calls** — the server is purely operational; all reasoning is provided by the client
 
 ---
@@ -92,8 +59,12 @@ Automatic report generation was considered and rejected. A one-shot report canno
 
 ### E01 Mounting — Linux
 
+E01 images are extracted using `pytsk3` (The Sleuth Kit Python bindings) — **no root access, no FUSE mounts required.** pytsk3 is included in the package dependencies.
+
+If pytsk3 is unavailable, the server falls back to the Sleuth Kit CLI tools:
+
 ```bash
-sudo apt install ewf-tools ntfs-3g
+sudo apt install sleuthkit
 ```
 
 ### E01 Mounting — Windows
@@ -132,6 +103,8 @@ All settings are environment variables, set in your MCP client config.
 
 ## MCP Client Setup
 
+ChainsawMCP works with any MCP-compatible client. Use **Claude Desktop** for cloud-based analysis or **OpenWebUI / LM Studio** to keep evidence entirely on your local network.
+
 ### Claude Desktop
 
 Add to `claude_desktop_config.json`:
@@ -166,13 +139,41 @@ claude mcp add ChainsawMCP ChainsawMCP \
   -e CHAINSAWMCP_WEBHOOK_URL=https://hooks.slack.com/...
 ```
 
+### OpenWebUI (local LLM)
+
+Start the server in HTTP mode and configure it as an MCP tool server in OpenWebUI:
+
+```bash
+CHAINSAW_BIN=/usr/local/bin/chainsaw \
+CHAINSAW_RULES=/opt/chainsaw/rules \
+CHAINSAWMCP_JOBS_DIR=/opt/chainsawjobs \
+CHAINSAWMCP_WEBHOOK_URL=https://discord.com/api/webhooks/... \
+ChainsawMCP --transport streamable-http
+```
+
+Then add `http://localhost:8000/mcp` as an MCP server in OpenWebUI under **Admin → External Tools**. Pair with any locally hosted model — Llama, Mistral, Qwen, or any model with strong instruction-following capability. Evidence never leaves your network.
+
 ---
 
 ## Tools
 
-### `start_hunt`
+Tools are listed in execution order for a standard workflow.
 
-Start a Chainsaw hunt against an EVTX directory or E01 image. Returns in under one second — Chainsaw runs as a fully detached background process.
+---
+
+### 1. `prepare_evidence` _(E01 images only)_
+
+Mount a forensic E01 image, extract all `.evtx` files, and stage them for Chainsaw. Skip this step for EVTX directories — `start_hunt` handles those directly.
+
+| Argument | Type | Description |
+|---|---|---|
+| `path` | string, **required** | Absolute path to an `.E01` file |
+
+---
+
+### 2. `start_hunt`
+
+Start a Chainsaw hunt against an EVTX directory or E01 image. Returns in under one second — Chainsaw runs as a fully detached background process with no connection to the MCP session.
 
 | Argument | Type | Description |
 |---|---|---|
@@ -182,47 +183,35 @@ Start a Chainsaw hunt against an EVTX directory or E01 image. Returns in under o
 | `mapping_path` | string, optional | Override `CHAINSAW_MAPPING` |
 | `extra_args` | array, optional | Extra flags passed verbatim to `chainsaw hunt` |
 
-Returns a job ID and runner PID. A webhook POST fires when the hunt completes.
+Returns a job ID and runner PID. A webhook POST fires when the hunt completes. `--skip-errors` is always enabled — a single corrupt log file will not abort the hunt.
 
 ---
 
-### `load_hunt_results`
+### 3. `load_hunt_results`
 
-Load results from a completed hunt into the session for analysis. If `job_id` is omitted, the most recently completed hunt is loaded automatically.
+Load results from a completed hunt into the session for analysis. If `job_id` is omitted, the most recently completed hunt is loaded automatically. Call this after receiving the webhook notification.
 
 | Argument | Type | Description |
 |---|---|---|
 | `job_id` | string, optional | Job ID from `start_hunt`. Omit to load the latest. |
 
-Call `chainsaw_report` and `get_detections` after this.
+---
+
+### 4. `chainsaw_report`
+
+Write the full hunt report to disk and return a structured summary including severity breakdown (critical / high / medium / low / info), hit counts by rule, and top detections.
 
 ---
 
-### `chainsaw_report`
+### 5. `get_detections`
 
-Write the full hunt report to disk and return a structured summary. Includes severity breakdown (critical / high / medium / low / info), hit counts by rule, and top detections.
-
----
-
-### `get_detections`
-
-Return individual events from the completed hunt, optionally filtered by rule name or severity. Use this to investigate specific detections after reviewing the report.
+Return individual events from the completed hunt, filtered by rule name or severity. Use this to drill into specific detections surfaced by `chainsaw_report`.
 
 | Argument | Type | Description |
 |---|---|---|
 | `rule` | string, optional | Case-insensitive substring match on rule name |
 | `severity` | string, optional | Exact severity level: `critical`, `high`, `medium`, `low`, `info` |
 | `limit` | integer, optional | Max events to return (default: 25) |
-
----
-
-### `prepare_evidence`
-
-Only needed for E01 forensic images. Mounts the image, locates all `.evtx` files across the filesystem, and copies them to a temporary staging directory. For EVTX directories, use `start_hunt` directly — it handles validation internally.
-
-| Argument | Type | Description |
-|---|---|---|
-| `path` | string, **required** | Absolute path to an `.E01` file |
 
 ---
 
