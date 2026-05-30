@@ -164,7 +164,7 @@ def spawn_hunt_detached(
     log_file = job_dir / "chainsaw_stderr.log"
 
     detach: dict = (
-        {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
+        {"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
         if sys.platform == "win32"
         else {"start_new_session": True}
     )
