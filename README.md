@@ -10,7 +10,41 @@ Because the server makes no LLM calls of its own, it works equally well with **c
 
 ## How It Works
 
-![ChainsawMCP Workflow](assets/workflow.svg)
+```
+  Analyst prompt:
+  "Run a hunt on F:\ChainsawEvals"
+          │
+          ▼
+  ┌───────────────────┐
+  │   start_hunt      │  ← spawns Chainsaw as detached process
+  │   (returns in     │    no MCP session kept alive
+  │    < 1 second)    │    --skip-errors on by default
+  └───────────────────┘
+          │
+          │  [Chainsaw runs independently — minutes to hours]
+          │
+          ▼
+  ┌───────────────────┐
+  │  Webhook fires    │  ← Discord, Slack, or any HTTP endpoint
+  │  "Hunt complete   │    7,098 hits · 74 rules · job f2ef9e2d
+  │   — 7098 hits"    │
+  └───────────────────┘
+          │
+  Analyst returns:
+  "Analyze the results"
+          │
+          ▼
+  ┌───────────────────┐
+  │ load_hunt_results │  ← instant — reads pre-computed results
+  └───────────────────┘
+          │
+          ▼
+  ┌───────────────────┐
+  │  chainsaw_report  │  ← severity breakdown, top rules
+  │  get_detections   │  ← drill into specific rules or severity
+  │  [follow-up Q&A]  │  ← unlimited interactive analysis
+  └───────────────────┘
+```
 
 The MCP server handles evidence preparation and Chainsaw execution. The AI client — Claude Desktop, OpenWebUI, LM Studio, or anything MCP-compatible — provides all the reasoning. The server makes no LLM calls.
 
