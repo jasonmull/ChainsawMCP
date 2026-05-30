@@ -75,8 +75,10 @@ def run_hunt(
                 cmd,
                 stdout=fh,
                 stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,  # prevent stdin contention with MCP stdio transport
+                stdin=subprocess.DEVNULL,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
             )
     except FileNotFoundError:
