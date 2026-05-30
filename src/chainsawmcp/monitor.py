@@ -84,13 +84,54 @@ def _count_hits(job_id: str) -> tuple[int, int]:
 
 
 def _post_webhook(url: str, payload: dict) -> None:
-    body = json.dumps(payload).encode("utf-8")
+    """POST hunt completion to a webhook.
+
+    Sends a human-readable message in both 'content' (Discord) and 'text'
+    (Slack) fields, plus raw data fields for generic webhook receivers.
+    """
+    status = payload.get("status", "unknown")
+    job_id = payload.get("job_id", "?")
+    hit_count = payload.get("hit_count", 0)
+    rules = payload.get("rules_triggered", 0)
+    completed_at = payload.get("completed_at", "")
+    error = payload.get("error")
+
+    if status == "complete":
+        msg = (
+            f"✅ ChainsawMCP hunt complete (job {job_id})\n"
+            f"Hits: {hit_count} across {rules} rules\n"
+            f"Completed: {completed_at}\n"
+            f"Call load_hunt_results() in your MCP session to begin analysis."
+        )
+    else:
+        msg = (
+            f"❌ ChainsawMCP hunt failed (job {job_id})\n"
+            f"Error: {error or 'unknown'}"
+        )
+
+    body = json.dumps({
+        "content": msg,   # Discord
+        "text": msg,      # Slack
+        **payload,        # raw fields for generic receivers
+    }).encode("utf-8")
+
     req = Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
     try:
-        with urlopen(req, timeout=10) as resp:
+        with urlopen(req, timeout=15) as resp:
             resp.read()
-    except URLError:
-        pass
+    except Exception as e:
+        # Write failure to job log so it's visible
+        job_id_str = payload.get("job_id", "unknown")
+        jobs_dir = os.environ.get("CHAINSAWMCP_JOBS_DIR")
+        if jobs_dir:
+            log = Path(jobs_dir) / job_id_str / "webhook_error.log"
+        else:
+            import tempfile
+            log = Path(tempfile.gettempdir()) / "chainsawmcp_jobs" / job_id_str / "webhook_error.log"
+        try:
+            log.write_text(f"Webhook POST failed: {type(e).__name__}: {e}\nURL: {url}\n", encoding="utf-8")
+        except OSError:
+            pass
 
 
 def main() -> None:
