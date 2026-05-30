@@ -331,8 +331,10 @@ async def _start_hunt(args: dict) -> CallToolResult:
         f"  Runner PID: {runner_pid}\n"
         f"  Results will be written to: {jdir / 'hunt_results.json'}\n"
         f"  {webhook_note}\n\n"
-        "Chainsaw is running as a detached process — this MCP session can be closed.\n"
-        "When the hunt completes, call load_hunt_results() (no arguments needed) to begin analysis."
+        "IMPORTANT: Chainsaw is now running as a fully independent background process.\n"
+        "Do NOT call hunt_status or load_hunt_results yet — the hunt is not done.\n"
+        "Tell the user the hunt is running and that they will be notified when it finishes.\n"
+        "When the webhook fires or the user returns to ask for results, call load_hunt_results()."
     )
 
 
@@ -472,13 +474,57 @@ async def _run_hunt_background(
 
 
 async def _hunt_status(_args: dict) -> CallToolResult:
+    import json as _json
+
+    # Check for detached jobs first — these are independent of session state
+    jobs_dir = get_jobs_dir()
+    detached_running = []
+    detached_complete = []
+    if jobs_dir.exists():
+        for jf in jobs_dir.glob("*/job.json"):
+            try:
+                d = _json.loads(jf.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            jstatus = d.get("status")
+            jid = d.get("job_id", "?")
+            if jstatus == "running":
+                started = d.get("started_at", "?")
+                detached_running.append(f"  job {jid} — started {started}")
+            elif jstatus == "complete":
+                detached_complete.append(
+                    f"  job {jid} — {d.get('hit_count', '?')} hits, "
+                    f"completed {d.get('completed_at', '?')}"
+                )
+
+    if detached_running:
+        lines = ["Detached hunt(s) running (started via start_hunt):"]
+        lines += detached_running
+        lines += [
+            "",
+            "These run independently — do NOT keep polling this tool.",
+            "You will be notified via webhook when they finish.",
+            "Then call load_hunt_results() to load the results for analysis.",
+        ]
+        if detached_complete:
+            lines += ["", "Already completed:"] + detached_complete
+        return _ok("\n".join(lines))
+
+    if detached_complete and state.hunt_status == "idle":
+        lines = ["Detached hunt(s) already completed — ready to analyze:"]
+        lines += detached_complete
+        lines += ["", "Call load_hunt_results() to load the results."]
+        return _ok("\n".join(lines))
+
+    # Fall through to inline (legacy chainsaw_hunt) status
     status = state.hunt_status
 
     if status == "idle":
-        return _ok("No hunt has been started. Call chainsaw_hunt first.")
+        return _ok(
+            "No hunt is currently running.\n"
+            "Use start_hunt to begin a detached hunt, or chainsaw_hunt for small datasets."
+        )
 
-    # If the hunt is running, block here (polling every 5 s, up to 60 s) so the
-    # LLM client naturally waits without needing to understand sleep semantics.
     if status == "running":
         deadline = time.time() + 60
         while state.hunt_status == "running" and time.time() < deadline:
