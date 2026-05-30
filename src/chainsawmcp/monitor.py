@@ -1,16 +1,17 @@
-"""Completion monitor for detached Chainsaw hunts.
+"""Detached hunt runner for ChainsawMCP.
 
-Invoked as: python -m chainsawmcp.monitor <job_id> <chainsaw_pid>
+Invoked as: python -m chainsawmcp.monitor <job_id> <chainsaw_cmd_json>
 
-Blocks until the Chainsaw process exits, then updates job.json and
-POSTs a webhook notification if CHAINSAWMCP_WEBHOOK_URL is set.
+Runs as a fully detached process. Opens output files itself (avoiding
+Windows cross-process handle inheritance issues), executes Chainsaw
+blocking, updates job.json, and POSTs a webhook on completion.
 Uses only stdlib — no extra dependencies.
 """
 
 import json
 import os
+import subprocess
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import URLError
@@ -18,7 +19,6 @@ from urllib.request import Request, urlopen
 
 
 def _job_dir(job_id: str) -> Path:
-    # Inline the path logic to avoid importing config (which imports Path) in a detached process
     jobs_dir = os.environ.get("CHAINSAWMCP_JOBS_DIR")
     if jobs_dir:
         return Path(jobs_dir) / job_id
@@ -49,7 +49,6 @@ def _write_job(job_id: str, data: dict) -> None:
 
 
 def _count_hits(job_id: str) -> tuple[int, int]:
-    """Return (hit_count, rules_triggered) from the results file."""
     rpath = _results_path(job_id)
     try:
         raw = rpath.read_text(encoding="utf-8").strip()
@@ -63,7 +62,7 @@ def _count_hits(job_id: str) -> tuple[int, int]:
             hits = json.loads(raw)
         except json.JSONDecodeError:
             pass
-    else:
+    if not hits:
         for line in raw.splitlines():
             line = line.strip()
             if not line:
@@ -84,29 +83,6 @@ def _count_hits(job_id: str) -> tuple[int, int]:
     return len(hits), len(rules)
 
 
-def _wait_for_pid(pid: int) -> int:
-    """Wait for a PID to exit. Returns exit code if available, else -1."""
-    if sys.platform == "win32":
-        import ctypes
-        WAIT_INFINITE = 0xFFFFFFFF
-        SYNCHRONIZE = 0x00100000
-        handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
-        if handle:
-            ctypes.windll.kernel32.WaitForSingleObject(handle, WAIT_INFINITE)
-            ctypes.windll.kernel32.CloseHandle(handle)
-        return -1
-    else:
-        # We can't waitpid on a non-child process; poll instead.
-        while True:
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                return -1
-            except PermissionError:
-                pass  # still alive, no permission to signal
-            time.sleep(5)
-
-
 def _post_webhook(url: str, payload: dict) -> None:
     body = json.dumps(payload).encode("utf-8")
     req = Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
@@ -119,36 +95,59 @@ def _post_webhook(url: str, payload: dict) -> None:
 
 def main() -> None:
     if len(sys.argv) < 3:
-        print("Usage: python -m chainsawmcp.monitor <job_id> <chainsaw_pid>", file=sys.stderr)
+        print("Usage: python -m chainsawmcp.monitor <job_id> <chainsaw_cmd_json>", file=sys.stderr)
         sys.exit(1)
 
     job_id = sys.argv[1]
     try:
-        chainsaw_pid = int(sys.argv[2])
-    except ValueError:
-        print(f"Invalid PID: {sys.argv[2]}", file=sys.stderr)
+        cmd: list[str] = json.loads(sys.argv[2])
+    except (json.JSONDecodeError, IndexError) as e:
+        print(f"Invalid command JSON: {e}", file=sys.stderr)
         sys.exit(1)
 
-    _wait_for_pid(chainsaw_pid)
+    jdir = _job_dir(job_id)
+    results_file = _results_path(job_id)
+    log_file = jdir / "chainsaw_stderr.log"
 
-    # Chainsaw has exited — determine success or failure
-    rpath = _results_path(job_id)
+    # Record our own PID so the MCP server can find us
+    data = _read_job(job_id)
+    data["runner_pid"] = os.getpid()
+    _write_job(job_id, data)
+
+    # Run Chainsaw — file handles opened here, in this process, so no inheritance issues
+    returncode = -1
+    error_detail = ""
+    try:
+        with results_file.open("w", encoding="utf-8") as out_fh, \
+             log_file.open("w", encoding="utf-8") as err_fh:
+            proc = subprocess.run(
+                cmd,
+                stdout=out_fh,
+                stderr=err_fh,
+                stdin=subprocess.DEVNULL,
+            )
+            returncode = proc.returncode
+    except FileNotFoundError:
+        error_detail = f"Chainsaw binary not found: {cmd[0]}"
+    except Exception as e:
+        error_detail = f"{type(e).__name__}: {e}"
+
     completed_at = datetime.now(timezone.utc).isoformat()
 
-    if rpath.exists() and rpath.stat().st_size > 0:
+    if not error_detail and returncode != 0:
+        try:
+            error_detail = log_file.read_text(encoding="utf-8", errors="replace").strip()[-500:]
+        except OSError:
+            error_detail = f"Chainsaw exited with code {returncode}"
+
+    if not error_detail and results_file.exists() and results_file.stat().st_size > 0:
         hit_count, rules_triggered = _count_hits(job_id)
         status = "complete"
         error = None
     else:
-        # Check stderr log for an error message
-        log = _job_dir(job_id) / "chainsaw_stderr.log"
-        error = ""
-        try:
-            error = log.read_text(encoding="utf-8", errors="replace").strip()[-500:]
-        except OSError:
-            pass
         hit_count, rules_triggered = 0, 0
         status = "error"
+        error = error_detail or "No results produced"
 
     data = _read_job(job_id)
     data.update({
