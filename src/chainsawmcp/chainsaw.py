@@ -112,7 +112,7 @@ def _build_command(
     extra_args: list[str],
 ) -> list[str]:
     binary = get_chainsaw_binary()
-    cmd = [str(binary), "hunt", str(evtx_dir), "--json", "--accept-license", "--no-progress"]
+    cmd = [str(binary), "hunt", str(evtx_dir), "--json"]
 
     if rules_path:
         cmd += ["--rule", str(rules_path)]
