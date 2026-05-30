@@ -1,140 +1,186 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 740 720" width="740" height="720" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 860" width="760" height="860" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif">
   <defs>
-    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#0f1117"/>
-      <stop offset="100%" stop-color="#1a1d2e"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
     </linearGradient>
-    <linearGradient id="analystGrad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#1e3a5f"/>
-      <stop offset="100%" stop-color="#163354"/>
+
+    <!-- Card fills -->
+    <linearGradient id="fillBlue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d1f3c"/>
+      <stop offset="100%" stop-color="#091528"/>
     </linearGradient>
-    <linearGradient id="huntGrad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#1a3a2a"/>
-      <stop offset="100%" stop-color="#0f2a1c"/>
+    <linearGradient id="fillGreen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a2218"/>
+      <stop offset="100%" stop-color="#061610"/>
     </linearGradient>
-    <linearGradient id="chainsawGrad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#2a1a3a"/>
-      <stop offset="100%" stop-color="#1c0f2a"/>
+    <linearGradient id="fillPurple" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#160d2e"/>
+      <stop offset="100%" stop-color="#0e0820"/>
     </linearGradient>
-    <linearGradient id="webhookGrad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#3a2a0a"/>
-      <stop offset="100%" stop-color="#2a1c00"/>
+    <linearGradient id="fillOrange" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2a1500"/>
+      <stop offset="100%" stop-color="#1c0e00"/>
     </linearGradient>
-    <linearGradient id="analysisGrad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#1e3a5f"/>
-      <stop offset="100%" stop-color="#163354"/>
-    </linearGradient>
-    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="3" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+
+    <filter id="cardShadow">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.6"/>
     </filter>
-    <filter id="shadow" x="-5%" y="-5%" width="110%" height="120%">
-      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.5"/>
-    </filter>
-    <marker id="arrowBlue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-      <polygon points="0 0, 10 3.5, 0 7" fill="#4a9eff"/>
+
+    <marker id="arrowBlue" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/>
     </marker>
-    <marker id="arrowGreen" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-      <polygon points="0 0, 10 3.5, 0 7" fill="#4ade80"/>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
     </marker>
-    <marker id="arrowOrange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-      <polygon points="0 0, 10 3.5, 0 7" fill="#fb923c"/>
+    <marker id="arrowPurple" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#bc8cff"/>
     </marker>
-    <marker id="arrowPurple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-      <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa"/>
+    <marker id="arrowOrange" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f0883e"/>
     </marker>
   </defs>
 
   <!-- Background -->
-  <rect width="740" height="720" fill="url(#bgGrad)" rx="12"/>
+  <rect width="760" height="860" fill="url(#bg)" rx="14"/>
+  <rect x="1" y="1" width="758" height="858" fill="none" stroke="#30363d" stroke-width="1" rx="14"/>
 
-  <!-- Title -->
-  <text x="370" y="38" text-anchor="middle" fill="#e2e8f0" font-size="18" font-weight="700" letter-spacing="1">ChainsawMCP — Workflow</text>
-  <line x1="120" y1="50" x2="620" y2="50" stroke="#334155" stroke-width="1"/>
+  <!-- Title bar -->
+  <rect x="0" y="0" width="760" height="56" fill="#161b22" rx="14"/>
+  <rect x="0" y="42" width="760" height="14" fill="#161b22"/>
+  <line x1="0" y1="56" x2="760" y2="56" stroke="#30363d" stroke-width="1"/>
+  <!-- Dots -->
+  <circle cx="28" cy="28" r="7" fill="#ff5f57"/>
+  <circle cx="52" cy="28" r="7" fill="#febc2e"/>
+  <circle cx="76" cy="28" r="7" fill="#28c840"/>
+  <text x="380" y="33" text-anchor="middle" fill="#c9d1d9" font-size="15" font-weight="600" letter-spacing="0.5">ChainsawMCP — Workflow</text>
 
-  <!-- ── Step 1: Analyst Prompt ── -->
-  <rect x="40" y="68" width="660" height="82" rx="10" fill="url(#analystGrad)" stroke="#4a9eff" stroke-width="1.5" filter="url(#shadow)"/>
-  <rect x="40" y="68" width="6" height="82" rx="3" fill="#4a9eff"/>
-  <text x="68" y="94" fill="#93c5fd" font-size="11" font-weight="600" letter-spacing="1.5">ANALYST PROMPT</text>
-  <text x="68" y="116" fill="#e2e8f0" font-size="14" font-weight="500">"Run a hunt on F:\ChainsawEvals"</text>
-  <text x="68" y="138" fill="#64748b" font-size="12">Claude Desktop · OpenWebUI · Any MCP-compatible client</text>
+  <!-- ═══════════════════════════════════════════
+       CARD 1 — ANALYST PROMPT   y=76
+  ════════════════════════════════════════════ -->
+  <rect x="32" y="76" width="696" height="96" rx="10" fill="url(#fillBlue)" stroke="#58a6ff" stroke-width="1.5" filter="url(#cardShadow)"/>
+  <!-- accent bar -->
+  <rect x="32" y="76" width="5" height="96" rx="3" fill="#58a6ff"/>
 
-  <!-- Arrow 1 -->
-  <line x1="370" y1="152" x2="370" y2="174" stroke="#4a9eff" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <text x="56" y="103" fill="#58a6ff" font-size="10" font-weight="700" letter-spacing="2">ANALYST PROMPT</text>
+  <text x="56" y="127" fill="#e6edf3" font-size="15" font-weight="500">"Run a hunt on F:\ChainsawEvals"</text>
+  <text x="56" y="154" fill="#6e7681" font-size="12">Claude Desktop · OpenWebUI · LM Studio · Any MCP-compatible client</text>
 
-  <!-- ── Step 2: start_hunt ── -->
-  <rect x="40" y="178" width="660" height="90" rx="10" fill="url(#huntGrad)" stroke="#4ade80" stroke-width="1.5" filter="url(#shadow)"/>
-  <rect x="40" y="178" width="6" height="90" rx="3" fill="#4ade80"/>
-  <text x="68" y="204" fill="#86efac" font-size="11" font-weight="600" letter-spacing="1.5">MCP TOOL — start_hunt</text>
-  <text x="68" y="226" fill="#e2e8f0" font-size="14" font-weight="500">Prepares evidence · Spawns detached runner · Returns in &lt; 1 second</text>
-  <!-- Badge -->
-  <rect x="500" y="216" width="178" height="26" rx="13" fill="#14532d" stroke="#4ade80" stroke-width="1"/>
-  <text x="589" y="234" text-anchor="middle" fill="#4ade80" font-size="11" font-weight="600">✓ MCP session stays free</text>
-  <text x="68" y="254" fill="#64748b" font-size="12">Job ID written to disk · Runner PID returned · --skip-errors enabled</text>
+  <!-- Arrow down -->
+  <line x1="380" y1="174" x2="380" y2="198" stroke="#58a6ff" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#arrowBlue)"/>
 
-  <!-- Arrow 2 -->
-  <line x1="370" y1="270" x2="370" y2="292" stroke="#a78bfa" stroke-width="2" marker-end="url(#arrowPurple)"/>
+  <!-- ═══════════════════════════════════════════
+       CARD 2 — start_hunt   y=200
+  ════════════════════════════════════════════ -->
+  <rect x="32" y="200" width="696" height="106" rx="10" fill="url(#fillGreen)" stroke="#3fb950" stroke-width="1.5" filter="url(#cardShadow)"/>
+  <rect x="32" y="200" width="5" height="106" rx="3" fill="#3fb950"/>
 
-  <!-- ── Step 3: Chainsaw (detached) ── -->
-  <rect x="40" y="296" width="660" height="90" rx="10" fill="url(#chainsawGrad)" stroke="#a78bfa" stroke-width="1.5" filter="url(#shadow)"/>
-  <rect x="40" y="296" width="6" height="90" rx="3" fill="#a78bfa"/>
-  <text x="68" y="322" fill="#c4b5fd" font-size="11" font-weight="600" letter-spacing="1.5">CHAINSAW — DETACHED PROCESS</text>
-  <text x="68" y="344" fill="#e2e8f0" font-size="14" font-weight="500">Hunts EVTXs against Sigma + Chainsaw rules · Writes JSON results to disk</text>
-  <!-- Badge -->
-  <rect x="460" y="334" width="218" height="26" rx="13" fill="#2e1065" stroke="#a78bfa" stroke-width="1"/>
-  <text x="569" y="352" text-anchor="middle" fill="#a78bfa" font-size="11" font-weight="600">Independent of MCP session</text>
-  <text x="68" y="372" fill="#64748b" font-size="12">Minutes to hours · Survives session close · Results persist across restarts</text>
+  <!-- label + badge on same row, no overlap -->
+  <text x="56" y="226" fill="#3fb950" font-size="10" font-weight="700" letter-spacing="2">MCP TOOL — start_hunt</text>
+  <!-- badge right-aligned -->
+  <rect x="554" y="213" width="162" height="22" rx="11" fill="#0a2a16" stroke="#3fb950" stroke-width="1"/>
+  <text x="635" y="229" text-anchor="middle" fill="#3fb950" font-size="11" font-weight="600">✓ Session stays free</text>
 
-  <!-- Arrow 3 -->
-  <line x1="370" y1="388" x2="370" y2="410" stroke="#fb923c" stroke-width="2" marker-end="url(#arrowOrange)"/>
+  <text x="56" y="251" fill="#e6edf3" font-size="14">Prepares evidence · Spawns detached runner · Returns in &lt; 1 second</text>
+  <text x="56" y="274" fill="#6e7681" font-size="12">Job ID written to disk · --skip-errors enabled · Results persist across sessions</text>
+  <text x="56" y="295" fill="#6e7681" font-size="12">Works with EVTX directories and E01 forensic images</text>
 
-  <!-- ── Step 4: Webhook ── -->
-  <rect x="40" y="414" width="660" height="90" rx="10" fill="url(#webhookGrad)" stroke="#fb923c" stroke-width="1.5" filter="url(#shadow)"/>
-  <rect x="40" y="414" width="6" height="90" rx="3" fill="#fb923c"/>
-  <text x="68" y="440" fill="#fdba74" font-size="11" font-weight="600" letter-spacing="1.5">WEBHOOK NOTIFICATION</text>
-  <text x="68" y="462" fill="#e2e8f0" font-size="14" font-weight="500">Hunt complete · Hits and rule count delivered to your channel</text>
-  <!-- Badges -->
-  <rect x="68" y="473" width="82" height="22" rx="11" fill="#431407" stroke="#fb923c" stroke-width="1"/>
-  <text x="109" y="489" text-anchor="middle" fill="#fb923c" font-size="11" font-weight="600">Discord</text>
-  <rect x="162" y="473" width="62" height="22" rx="11" fill="#431407" stroke="#fb923c" stroke-width="1"/>
-  <text x="193" y="489" text-anchor="middle" fill="#fb923c" font-size="11" font-weight="600">Slack</text>
-  <rect x="236" y="473" width="120" height="22" rx="11" fill="#431407" stroke="#fb923c" stroke-width="1"/>
-  <text x="296" y="489" text-anchor="middle" fill="#fb923c" font-size="11" font-weight="600">Any HTTP endpoint</text>
+  <!-- Arrow down -->
+  <line x1="380" y1="308" x2="380" y2="332" stroke="#bc8cff" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#arrowPurple)"/>
 
-  <!-- Arrow 4 -->
-  <line x1="370" y1="506" x2="370" y2="528" stroke="#4a9eff" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <!-- ═══════════════════════════════════════════
+       CARD 3 — Chainsaw detached   y=334
+  ════════════════════════════════════════════ -->
+  <rect x="32" y="334" width="696" height="106" rx="10" fill="url(#fillPurple)" stroke="#bc8cff" stroke-width="1.5" filter="url(#cardShadow)"/>
+  <rect x="32" y="334" width="5" height="106" rx="3" fill="#bc8cff"/>
 
-  <!-- ── Step 5: Analysis ── -->
-  <rect x="40" y="532" width="660" height="148" rx="10" fill="url(#analysisGrad)" stroke="#4a9eff" stroke-width="1.5" filter="url(#shadow)"/>
-  <rect x="40" y="532" width="6" height="148" rx="3" fill="#4a9eff"/>
-  <text x="68" y="558" fill="#93c5fd" font-size="11" font-weight="600" letter-spacing="1.5">INTERACTIVE ANALYSIS</text>
+  <text x="56" y="360" fill="#bc8cff" font-size="10" font-weight="700" letter-spacing="2">CHAINSAW — DETACHED PROCESS</text>
+  <rect x="502" y="347" width="214" height="22" rx="11" fill="#1a0a38" stroke="#bc8cff" stroke-width="1"/>
+  <text x="609" y="363" text-anchor="middle" fill="#bc8cff" font-size="11" font-weight="600">Independent of MCP session</text>
 
-  <!-- Tool pills -->
-  <rect x="68" y="568" width="148" height="32" rx="8" fill="#1e3a5f" stroke="#4a9eff" stroke-width="1.2"/>
-  <text x="142" y="584" text-anchor="middle" fill="#93c5fd" font-size="10" font-weight="700">load_hunt_results</text>
-  <text x="142" y="596" text-anchor="middle" fill="#475569" font-size="10">loads pre-computed hits</text>
+  <text x="56" y="385" fill="#e6edf3" font-size="14">Hunts EVTXs against Sigma + Chainsaw rules · Writes JSON results to disk</text>
+  <text x="56" y="408" fill="#6e7681" font-size="12">Minutes to hours · Survives session close · Handles corrupt files gracefully</text>
+  <text x="56" y="429" fill="#6e7681" font-size="12">Windows: CREATE_NEW_PROCESS_GROUP · Linux: start_new_session</text>
 
-  <rect x="232" y="568" width="148" height="32" rx="8" fill="#1e3a5f" stroke="#4a9eff" stroke-width="1.2"/>
-  <text x="306" y="584" text-anchor="middle" fill="#93c5fd" font-size="10" font-weight="700">chainsaw_report</text>
-  <text x="306" y="596" text-anchor="middle" fill="#475569" font-size="10">severity breakdown</text>
+  <!-- Arrow down -->
+  <line x1="380" y1="442" x2="380" y2="466" stroke="#f0883e" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#arrowOrange)"/>
 
-  <rect x="396" y="568" width="148" height="32" rx="8" fill="#1e3a5f" stroke="#4a9eff" stroke-width="1.2"/>
-  <text x="470" y="584" text-anchor="middle" fill="#93c5fd" font-size="10" font-weight="700">get_detections</text>
-  <text x="470" y="596" text-anchor="middle" fill="#475569" font-size="10">filter by rule / severity</text>
+  <!-- ═══════════════════════════════════════════
+       CARD 4 — Webhook   y=468
+  ════════════════════════════════════════════ -->
+  <rect x="32" y="468" width="696" height="106" rx="10" fill="url(#fillOrange)" stroke="#f0883e" stroke-width="1.5" filter="url(#cardShadow)"/>
+  <rect x="32" y="468" width="5" height="106" rx="3" fill="#f0883e"/>
 
-  <rect x="560" y="568" width="118" height="32" rx="8" fill="#1e3a5f" stroke="#4a9eff" stroke-width="1.2"/>
-  <text x="619" y="584" text-anchor="middle" fill="#93c5fd" font-size="10" font-weight="700">Follow-up Q&amp;A</text>
-  <text x="619" y="596" text-anchor="middle" fill="#475569" font-size="10">unlimited depth</text>
+  <text x="56" y="494" fill="#f0883e" font-size="10" font-weight="700" letter-spacing="2">WEBHOOK NOTIFICATION</text>
 
-  <!-- Arrows between analysis pills -->
-  <line x1="218" y1="584" x2="230" y2="584" stroke="#334155" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
-  <line x1="382" y1="584" x2="394" y2="584" stroke="#334155" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
-  <line x1="546" y1="584" x2="558" y2="584" stroke="#334155" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <text x="56" y="519" fill="#e6edf3" font-size="14">Hunt complete · Hits and rule count delivered instantly</text>
+  <text x="56" y="541" fill="#8b949e" font-size="13" font-style="italic">"✅ ChainsawMCP hunt complete (job f2ef9e2d) · 7,098 hits · 74 rules"</text>
 
-  <line x1="68" y1="616" x2="660" y2="616" stroke="#1e293b" stroke-width="1"/>
-  <text x="68" y="638" fill="#e2e8f0" font-size="13" font-weight="500">"Show me critical events"  ·  "Does this suggest lateral movement?"</text>
-  <text x="68" y="660" fill="#e2e8f0" font-size="13" font-weight="500">"Correlate logon times across endpoints"  ·  "Draft an exec summary"</text>
+  <!-- Badges on their own row -->
+  <rect x="56" y="553" width="76" height="22" rx="11" fill="#1c0a00" stroke="#f0883e" stroke-width="1"/>
+  <text x="94" y="569" text-anchor="middle" fill="#f0883e" font-size="11" font-weight="600">Discord</text>
+
+  <rect x="144" y="553" width="60" height="22" rx="11" fill="#1c0a00" stroke="#f0883e" stroke-width="1"/>
+  <text x="174" y="569" text-anchor="middle" fill="#f0883e" font-size="11" font-weight="600">Slack</text>
+
+  <rect x="216" y="553" width="136" height="22" rx="11" fill="#1c0a00" stroke="#f0883e" stroke-width="1"/>
+  <text x="284" y="569" text-anchor="middle" fill="#f0883e" font-size="11" font-weight="600">Any HTTP endpoint</text>
+
+  <!-- Arrow down -->
+  <line x1="380" y1="576" x2="380" y2="600" stroke="#58a6ff" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#arrowBlue)"/>
+
+  <!-- ═══════════════════════════════════════════
+       CARD 5 — Interactive Analysis   y=602
+  ════════════════════════════════════════════ -->
+  <rect x="32" y="602" width="696" height="226" rx="10" fill="url(#fillBlue)" stroke="#58a6ff" stroke-width="1.5" filter="url(#cardShadow)"/>
+  <rect x="32" y="602" width="5" height="226" rx="3" fill="#58a6ff"/>
+
+  <text x="56" y="628" fill="#58a6ff" font-size="10" font-weight="700" letter-spacing="2">INTERACTIVE ANALYSIS SESSION</text>
+
+  <!-- Divider -->
+  <line x1="56" y1="638" x2="716" y2="638" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Four tool pills — row layout with generous spacing -->
+  <!-- Pill 1 -->
+  <rect x="56" y="648" width="148" height="50" rx="8" fill="#0d1f3c" stroke="#58a6ff" stroke-width="1.2"/>
+  <text x="130" y="669" text-anchor="middle" fill="#58a6ff" font-size="12" font-weight="700">load_hunt_results</text>
+  <text x="130" y="687" text-anchor="middle" fill="#484f58" font-size="11">loads pre-computed hits</text>
+
+  <!-- Arrow -->
+  <line x1="206" y1="673" x2="222" y2="673" stroke="#30363d" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+
+  <!-- Pill 2 -->
+  <rect x="224" y="648" width="148" height="50" rx="8" fill="#0d1f3c" stroke="#58a6ff" stroke-width="1.2"/>
+  <text x="298" y="669" text-anchor="middle" fill="#58a6ff" font-size="12" font-weight="700">chainsaw_report</text>
+  <text x="298" y="687" text-anchor="middle" fill="#484f58" font-size="11">severity breakdown</text>
+
+  <!-- Arrow -->
+  <line x1="374" y1="673" x2="390" y2="673" stroke="#30363d" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+
+  <!-- Pill 3 -->
+  <rect x="392" y="648" width="148" height="50" rx="8" fill="#0d1f3c" stroke="#58a6ff" stroke-width="1.2"/>
+  <text x="466" y="669" text-anchor="middle" fill="#58a6ff" font-size="12" font-weight="700">get_detections</text>
+  <text x="466" y="687" text-anchor="middle" fill="#484f58" font-size="11">filter by rule / severity</text>
+
+  <!-- Arrow -->
+  <line x1="542" y1="673" x2="558" y2="673" stroke="#30363d" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+
+  <!-- Pill 4 -->
+  <rect x="560" y="648" width="148" height="50" rx="8" fill="#0d1f3c" stroke="#58a6ff" stroke-width="1.2"/>
+  <text x="634" y="669" text-anchor="middle" fill="#58a6ff" font-size="12" font-weight="700">Follow-up Q&amp;A</text>
+  <text x="634" y="687" text-anchor="middle" fill="#484f58" font-size="11">unlimited depth</text>
+
+  <!-- Divider -->
+  <line x1="56" y1="712" x2="716" y2="712" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Example questions -->
+  <text x="56" y="734" fill="#8b949e" font-size="12">"Show me all critical detections"</text>
+  <text x="56" y="754" fill="#8b949e" font-size="12">"Does the sequence of logon events suggest lateral movement?"</text>
+  <text x="56" y="774" fill="#8b949e" font-size="12">"Correlate the RDP activity with the audit log clearing timestamp"</text>
+  <text x="56" y="794" fill="#8b949e" font-size="12">"Draft an executive summary of threat actor activity"</text>
 
   <!-- Footer -->
-  <text x="370" y="698" text-anchor="middle" fill="#334155" font-size="11">No server-side LLM calls · Works with Claude, OpenWebUI, LM Studio, and any MCP-compatible client</text>
+  <text x="380" y="842" text-anchor="middle" fill="#3d444d" font-size="11">
+    No server-side LLM calls · Cloud or local models · Evidence stays on your network
+  </text>
 </svg>
