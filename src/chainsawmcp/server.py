@@ -53,8 +53,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="prepare_evidence",
             description=(
-                "Mount an E01 forensic image or validate an EVTX directory and stage "
-                "files for Chainsaw. Must be called before any other tool."
+                "Only needed for E01 forensic images — mounts and extracts EVTXs. "
+                "For EVTX directories, use start_hunt directly (it handles preparation internally). "
+                "After prepare_evidence, call start_hunt with the staged path."
             ),
             inputSchema={
                 "type": "object",
@@ -70,10 +71,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="chainsaw_hunt",
             description=(
-                "Start a Chainsaw hunt against staged EVTXs. Returns immediately — the hunt "
-                "runs in the background. Call hunt_status to wait for results; it blocks up to "
-                "60 seconds per call and returns as soon as the hunt finishes. "
-                "Call chainsaw_report once hunt_status reports 'done'."
+                "LEGACY — only use for very small evidence sets (< 300 MB) where you want "
+                "to wait inline. For any real investigation use start_hunt instead, which "
+                "runs Chainsaw as a fully detached process and never times out."
             ),
             inputSchema={
                 "type": "object",
@@ -268,7 +268,7 @@ async def _prepare_evidence(args: dict) -> CallToolResult:
         f"  Source : {path}\n"
         f"  EVTX files staged: {evtx_count}\n"
         f"  Staging dir: {ev.evtx_dir}\n\n"
-        "Next step: call chainsaw_hunt."
+        f"Next step: call start_hunt('{ev.evtx_dir}') to begin the hunt."
     )
 
 
