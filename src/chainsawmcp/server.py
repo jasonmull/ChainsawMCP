@@ -62,9 +62,9 @@ async def list_tools() -> list[Tool]:
             name="chainsaw_hunt",
             description=(
                 "Start a Chainsaw hunt against staged EVTXs. Returns immediately — the hunt "
-                "runs in the background. Call hunt_status after 60 seconds to check progress. "
-                "Do NOT poll hunt_status more than once per 60 seconds. "
-                "Call chainsaw_report once the hunt is done."
+                "runs in the background. Call hunt_status to wait for results; it blocks up to "
+                "60 seconds per call and returns as soon as the hunt finishes. "
+                "Call chainsaw_report once hunt_status reports 'done'."
             ),
             inputSchema={
                 "type": "object",
@@ -93,9 +93,9 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="hunt_status",
             description=(
-                "Check whether the background Chainsaw hunt is still running or has finished. "
-                "Wait at least 60 seconds between calls — do not poll in a tight loop. "
-                "When status is 'done', call chainsaw_report for the full results."
+                "Wait for the background Chainsaw hunt to finish. Blocks up to 60 seconds "
+                "per call and returns as soon as the hunt completes or the window expires. "
+                "Call repeatedly until status is 'done', then call chainsaw_report."
             ),
             inputSchema={
                 "type": "object",
@@ -276,6 +276,14 @@ async def _hunt_status(_args: dict) -> CallToolResult:
     if status == "idle":
         return _ok("No hunt has been started. Call chainsaw_hunt first.")
 
+    # If the hunt is running, block here (polling every 5 s, up to 60 s) so the
+    # LLM client naturally waits without needing to understand sleep semantics.
+    if status == "running":
+        deadline = time.time() + 60
+        while state.hunt_status == "running" and time.time() < deadline:
+            await asyncio.sleep(5)
+        status = state.hunt_status
+
     elapsed = _fmt_elapsed(
         ((state.hunt_finished_at or time.time()) - (state.hunt_started_at or time.time()))
     )
@@ -283,7 +291,7 @@ async def _hunt_status(_args: dict) -> CallToolResult:
     if status == "running":
         return _ok(
             f"Hunt still running — {elapsed} elapsed.\n"
-            "Wait another 60 seconds before calling hunt_status again."
+            "Call hunt_status again to keep waiting."
         )
 
     if status == "done":
