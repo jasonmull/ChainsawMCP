@@ -306,7 +306,7 @@ async def _start_hunt(args: dict) -> CallToolResult:
     jdir = get_jobs_dir() / job_id
 
     try:
-        chainsaw_pid, monitor_pid = spawn_hunt_detached(
+        runner_pid = spawn_hunt_detached(
             evtx_dir, job_id, jdir,
             rules_path=rules, sigma_path=sigma,
             mapping_path=mapping, extra_args=extra,
@@ -315,22 +315,22 @@ async def _start_hunt(args: dict) -> CallToolResult:
         update_job(job_id, status="error", error=str(e))
         return _error(str(e))
 
-    update_job(job_id, pid=chainsaw_pid, monitor_pid=monitor_pid)
+    update_job(job_id, pid=runner_pid)
 
     from .config import get_webhook_url
     webhook_note = (
-        f"\nA webhook POST will be sent to your configured URL when the hunt finishes."
+        "A webhook POST will be sent to your configured URL when the hunt finishes."
         if get_webhook_url()
-        else "\nNo webhook configured — set CHAINSAWMCP_WEBHOOK_URL to receive a notification."
+        else "No webhook configured — set CHAINSAWMCP_WEBHOOK_URL to receive a notification."
     )
 
     return _ok(
         f"Hunt started (job ID: {job_id}).\n"
         f"  Evidence : {path}\n"
         f"  EVTX files: {evtx_count}\n"
-        f"  Chainsaw PID: {chainsaw_pid}\n"
+        f"  Runner PID: {runner_pid}\n"
         f"  Results will be written to: {jdir / 'hunt_results.json'}\n"
-        f"{webhook_note}\n\n"
+        f"  {webhook_note}\n\n"
         "Chainsaw is running as a detached process — this MCP session can be closed.\n"
         "When the hunt completes, call load_hunt_results() (no arguments needed) to begin analysis."
     )

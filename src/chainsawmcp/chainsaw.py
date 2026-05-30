@@ -142,10 +142,11 @@ def spawn_hunt_detached(
     sigma_path: Path | None = None,
     mapping_path: Path | None = None,
     extra_args: list[str] | None = None,
-) -> tuple[int, int]:
-    """Spawn Chainsaw and a completion monitor as detached processes.
+) -> int:
+    """Spawn the hunt runner as a detached process. Returns the runner PID.
 
-    Returns (chainsaw_pid, monitor_pid). Both processes survive MCP session close.
+    The runner (monitor.py) opens its own file handles and runs Chainsaw
+    internally, avoiding Windows cross-process handle inheritance issues.
     """
     rules = rules_path or get_rules_path()
     sigma = sigma_path or get_sigma_path()
@@ -160,43 +161,26 @@ def spawn_hunt_detached(
 
     cmd = _build_command(evtx_dir, rules, sigma, mapping, extra_args or [])
 
-    output_file = job_dir / "hunt_results.json"
-    log_file = job_dir / "chainsaw_stderr.log"
-
     detach: dict = (
-        {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
+        {"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
         if sys.platform == "win32"
         else {"start_new_session": True}
     )
 
-    try:
-        with output_file.open("w", encoding="utf-8") as out_fh, \
-             log_file.open("w", encoding="utf-8") as err_fh:
-            chainsaw_proc = subprocess.Popen(
-                cmd,
-                stdout=out_fh,
-                stderr=err_fh,
-                stdin=subprocess.DEVNULL,
-                **detach,
-            )
-    except FileNotFoundError:
-        binary = get_chainsaw_binary()
-        raise ChainsawError(
-            f"Chainsaw binary '{binary}' not found. "
-            "Ensure it is on PATH or set CHAINSAW_BIN env var."
-        )
+    runner_cmd = [
+        sys.executable, "-m", "chainsawmcp.monitor",
+        job_id,
+        json.dumps(cmd),
+    ]
 
-    # Spawn the monitor alongside Chainsaw; it watches the PID and fires the webhook.
-    monitor_cmd = [sys.executable, "-m", "chainsawmcp.monitor", job_id, str(chainsaw_proc.pid)]
-    monitor_proc = subprocess.Popen(
-        monitor_cmd,
+    runner = subprocess.Popen(
+        runner_cmd,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         **detach,
     )
-
-    return chainsaw_proc.pid, monitor_proc.pid
+    return runner.pid
 
 
 def _parse_output_file(path: Path) -> list[dict[str, Any]]:
