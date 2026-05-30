@@ -69,54 +69,10 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name="chainsaw_hunt",
-            description=(
-                "LEGACY — only use for very small evidence sets (< 300 MB) where you want "
-                "to wait inline. For any real investigation use start_hunt instead, which "
-                "runs Chainsaw as a fully detached process and never times out."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "rules_path": {
-                        "type": "string",
-                        "description": "Path to Chainsaw rules directory (overrides CHAINSAW_RULES env var).",
-                    },
-                    "sigma_path": {
-                        "type": "string",
-                        "description": "Path to Sigma rules directory (overrides CHAINSAW_SIGMA env var).",
-                    },
-                    "mapping_path": {
-                        "type": "string",
-                        "description": "Path to mapping file for Sigma rules, e.g. mappings/sigma-event-logs-all.yml (overrides CHAINSAW_MAPPING env var). Required when using sigma_path.",
-                    },
-                    "extra_args": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Extra arguments passed verbatim to chainsaw hunt.",
-                    },
-                },
-                "required": [],
-            },
-        ),
-        Tool(
-            name="hunt_status",
-            description=(
-                "Wait for the background Chainsaw hunt to finish. Blocks up to 60 seconds "
-                "per call and returns as soon as the hunt completes or the window expires. "
-                "Call repeatedly until status is 'done', then call chainsaw_report."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        ),
-        Tool(
             name="chainsaw_report",
             description=(
                 "Write the full hunt report to disk and return a concise summary with severity "
-                "breakdown and top detections. Call after hunt_status reports 'done'. "
+                "breakdown and top detections. Call after load_hunt_results. "
                 "Use get_detections to drill into specific rules."
             ),
             inputSchema={
@@ -128,11 +84,10 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="start_hunt",
             description=(
-                "Start a Chainsaw hunt as a fully detached background process. "
-                "Returns immediately — Chainsaw keeps running even if this MCP session closes. "
+                "Start a Chainsaw hunt against an EVTX directory or E01 image. "
+                "Returns immediately — Chainsaw runs as a fully detached process and cannot time out. "
                 "A webhook POST is sent to CHAINSAWMCP_WEBHOOK_URL when the hunt finishes. "
-                "Call load_hunt_results (with no arguments) once notified, then chainsaw_report. "
-                "Use this instead of chainsaw_hunt for large evidence sets (> 1 GB)."
+                "Once notified, call load_hunt_results() then chainsaw_report to begin analysis."
             ),
             inputSchema={
                 "type": "object",
@@ -219,8 +174,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
         "prepare_evidence": _prepare_evidence,
         "start_hunt": _start_hunt,
         "load_hunt_results": _load_hunt_results,
-        "chainsaw_hunt": _chainsaw_hunt,
-        "hunt_status": _hunt_status,
         "chainsaw_report": _chainsaw_report,
         "get_detections": _get_detections,
     }
