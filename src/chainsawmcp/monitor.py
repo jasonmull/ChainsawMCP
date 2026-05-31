@@ -2,11 +2,10 @@
 
 Invoked as: python -m chainsawmcp.monitor <job_id> <payload_json>
 
-Two modes detected by payload type:
-  list  → direct chainsaw command (legacy mode, used for EVTX dirs)
-  dict  → evidence-prep mode: {"evidence_path": "...", "rules": "...", ...}
-           The monitor prepares evidence (including slow E01 extraction) and
-           then runs Chainsaw, so the MCP tool call returns immediately.
+Three modes detected by payload type / keys:
+  list                → direct chainsaw command (legacy; EVTX dir already prepared)
+  dict, "evidence_path"  → single E01 / path; monitor prepares then runs
+  dict, "evidence_paths" → bulk; monitor prepares all sources, runs chainsaw once
 
 Runs as a fully detached process. Updates job.json and POSTs a webhook on completion.
 """
@@ -17,7 +16,6 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 
@@ -91,7 +89,6 @@ def _count_hits(job_id: str) -> tuple[int, int]:
 
 
 def _post_webhook(url: str, payload: dict) -> None:
-    """POST hunt completion to a webhook."""
     status = payload.get("status", "unknown")
     job_id = payload.get("job_id", "?")
     hit_count = payload.get("hit_count", 0)
@@ -113,8 +110,8 @@ def _post_webhook(url: str, payload: dict) -> None:
         )
 
     body = json.dumps({
-        "content": msg,   # Discord
-        "text": msg,      # Slack
+        "content": msg,
+        "text": msg,
         **payload,
     }).encode("utf-8")
 
@@ -136,41 +133,51 @@ def _post_webhook(url: str, payload: dict) -> None:
             pass
 
 
-def _prepare_evidence_and_build_cmd(job_id: str, config: dict) -> "tuple[list[str] | None, object]":
-    """Prepare evidence (possibly slow E01 extraction) and return (chainsaw_cmd, ev).
-
-    Returns (None, None) on failure — job.json is updated with the error before returning.
-    """
-    from chainsawmcp.evidence import EvidenceError, prepare_evidence
-    from chainsawmcp.chainsaw import _build_command
-    from chainsawmcp.config import get_mapping_path, get_rules_path, get_sigma_path
-
-    evidence_path = config["evidence_path"]
-
+def _fail_job(job_id: str, error: str) -> None:
+    completed_at = _now()
     data = _read_job(job_id)
-    data["status"] = "preparing"
+    data.update({"status": "error", "error": error, "completed_at": completed_at,
+                 "hit_count": 0, "rules_triggered": 0})
     _write_job(job_id, data)
+    webhook_url = os.environ.get("CHAINSAWMCP_WEBHOOK_URL")
+    if webhook_url:
+        _post_webhook(webhook_url, {
+            "job_id": job_id, "status": "error", "hit_count": 0,
+            "rules_triggered": 0, "completed_at": completed_at, "error": error,
+        })
+
+
+def _prepare_one(evidence_path: str, job_id: str) -> "tuple[object | None, Path | None]":
+    """Prepare a single evidence source. Returns (PreparedEvidence, evtx_dir) or (None, None) on failure."""
+    from chainsawmcp.evidence import EvidenceError, prepare_evidence
 
     try:
         ev = prepare_evidence(evidence_path)
     except Exception as e:
-        completed_at = _now()
-        data = _read_job(job_id)
-        data.update({"status": "error", "error": str(e), "completed_at": completed_at})
-        _write_job(job_id, data)
-        webhook_url = os.environ.get("CHAINSAWMCP_WEBHOOK_URL")
-        if webhook_url:
-            _post_webhook(webhook_url, {
-                "job_id": job_id, "status": "error", "hit_count": 0,
-                "rules_triggered": 0, "completed_at": completed_at, "error": str(e),
-            })
+        _fail_job(job_id, f"Evidence preparation failed for {evidence_path}: {e}")
         return None, None
 
     evtx_dir = ev.evtx_dir
-    data = _read_job(job_id)
-    data["evtx_path"] = str(evtx_dir)
-    data["status"] = "running"
-    _write_job(job_id, data)
+
+    # Verify the staging directory actually exists and has files before proceeding.
+    if not evtx_dir.exists():
+        _fail_job(job_id, f"Staging directory missing after extraction: {evtx_dir}")
+        ev.cleanup()
+        return None, None
+
+    evtx_files = list(evtx_dir.rglob("*.evtx"))
+    if not evtx_files:
+        _fail_job(job_id, f"No .evtx files in staging directory: {evtx_dir}")
+        ev.cleanup()
+        return None, None
+
+    return ev, evtx_dir
+
+
+def _build_chainsaw_cmd(evtx_dirs: "list[Path]", config: dict) -> "list[str] | None":
+    """Build the chainsaw hunt command. Returns None (and fails the job) on config error."""
+    from chainsawmcp.chainsaw import _build_command
+    from chainsawmcp.config import get_mapping_path, get_rules_path, get_sigma_path
 
     rules_str = config.get("rules")
     sigma_str = config.get("sigma")
@@ -182,25 +189,9 @@ def _prepare_evidence_and_build_cmd(job_id: str, config: dict) -> "tuple[list[st
     mapping = Path(mapping_str) if mapping_str else get_mapping_path()
 
     if sigma and not mapping:
-        error = (
-            "Sigma rules require a mapping file. "
-            "Set CHAINSAW_MAPPING env var or pass mapping_path."
-        )
-        ev.cleanup()
-        completed_at = _now()
-        data = _read_job(job_id)
-        data.update({"status": "error", "error": error, "completed_at": completed_at})
-        _write_job(job_id, data)
-        webhook_url = os.environ.get("CHAINSAWMCP_WEBHOOK_URL")
-        if webhook_url:
-            _post_webhook(webhook_url, {
-                "job_id": job_id, "status": "error", "hit_count": 0,
-                "rules_triggered": 0, "completed_at": completed_at, "error": error,
-            })
-        return None, None
+        return None  # caller handles error
 
-    cmd = _build_command(evtx_dir, rules, sigma, mapping, extra_args)
-    return cmd, ev
+    return _build_command(evtx_dirs, rules, sigma, mapping, extra_args)
 
 
 def main() -> None:
@@ -215,25 +206,85 @@ def main() -> None:
         print(f"Invalid payload JSON: {e}", file=sys.stderr)
         sys.exit(1)
 
-    ev = None  # PreparedEvidence object to clean up after hunt
+    ev_objects: list = []   # PreparedEvidence objects to clean up after hunt
+    cmd: list[str] | None = None
 
     if isinstance(payload, list):
-        # Direct command mode (EVTX dir, already prepared)
-        cmd: list[str] | None = payload
-    else:
-        # Evidence-prep mode (E01 or raw path — preparation happens here)
-        cmd, ev = _prepare_evidence_and_build_cmd(job_id, payload)
-        if cmd is None:
-            return  # job already updated with error status
+        # Legacy direct-command mode (EVTX dir, already prepared)
+        cmd = payload
 
-    jdir = _job_dir(job_id)
-    results_file = _results_path(job_id)
-    log_file = jdir / "chainsaw_stderr.log"
+    elif "evidence_paths" in payload:
+        # Bulk mode: prepare multiple sources, run chainsaw once with all dirs
+        evidence_paths: list[str] = payload["evidence_paths"]
+        evtx_dirs: list[Path] = []
+
+        data = _read_job(job_id)
+        data["status"] = "preparing"
+        _write_job(job_id, data)
+
+        for ep in evidence_paths:
+            ev, evtx_dir = _prepare_one(ep, job_id)
+            if ev is None:
+                # _prepare_one already failed the job; clean up what we have so far
+                for done_ev in ev_objects:
+                    try:
+                        done_ev.cleanup()
+                    except Exception:
+                        pass
+                return
+            ev_objects.append(ev)
+            evtx_dirs.append(evtx_dir)
+
+        data = _read_job(job_id)
+        data["status"] = "running"
+        data["evtx_paths"] = [str(d) for d in evtx_dirs]
+        _write_job(job_id, data)
+
+        cmd = _build_chainsaw_cmd(evtx_dirs, payload)
+        if cmd is None:
+            error = "Sigma rules require a mapping file. Set CHAINSAW_MAPPING or pass mapping_path."
+            for done_ev in ev_objects:
+                try:
+                    done_ev.cleanup()
+                except Exception:
+                    pass
+            _fail_job(job_id, error)
+            return
+
+    else:
+        # Single evidence-prep mode
+        evidence_path: str = payload["evidence_path"]
+
+        data = _read_job(job_id)
+        data["status"] = "preparing"
+        _write_job(job_id, data)
+
+        ev, evtx_dir = _prepare_one(evidence_path, job_id)
+        if ev is None:
+            return  # _prepare_one already failed the job
+
+        ev_objects.append(ev)
+
+        data = _read_job(job_id)
+        data["status"] = "running"
+        data["evtx_path"] = str(evtx_dir)
+        _write_job(job_id, data)
+
+        cmd = _build_chainsaw_cmd([evtx_dir], payload)
+        if cmd is None:
+            error = "Sigma rules require a mapping file. Set CHAINSAW_MAPPING or pass mapping_path."
+            ev.cleanup()
+            _fail_job(job_id, error)
+            return
 
     # Record our own PID
     data = _read_job(job_id)
     data["runner_pid"] = os.getpid()
     _write_job(job_id, data)
+
+    jdir = _job_dir(job_id)
+    results_file = _results_path(job_id)
+    log_file = jdir / "chainsaw_stderr.log"
 
     returncode = -1
     error_detail = ""
@@ -252,9 +303,9 @@ def main() -> None:
     except Exception as e:
         error_detail = f"{type(e).__name__}: {e}"
     finally:
-        if ev is not None:
+        for done_ev in ev_objects:
             try:
-                ev.cleanup()
+                done_ev.cleanup()
             except Exception:
                 pass
 
