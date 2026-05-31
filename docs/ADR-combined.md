@@ -2,7 +2,7 @@
 
 ---
 
-# ADR-001: OpenWebUI / Ollama Integration Strategy
+# OpenWebUI / Ollama Integration Strategy
 
 **Date:** 2026-05-24  
 **Status:** Accepted  
@@ -223,7 +223,7 @@ User: !analyse F:\ChainsawEvals
 
 ---
 
-## Alternatives Considered
+## Alternatives Considered (OpenWebUI Integration)
 
 ### Native MCP only (no mcpo)
 
@@ -252,10 +252,10 @@ the server makes no LLM calls; the MCP client provides all reasoning.
 
 ---
 
-# ADR-002: Detached Hunt Execution Architecture
+# Detached Hunt Execution Architecture
 
-**Status:** Accepted  
 **Date:** 2026-05-30  
+**Status:** Accepted  
 **Deciders:** Jason Mull  
 
 ---
@@ -275,7 +275,7 @@ The core incompatibility: **MCP is a request/response protocol with client-side 
 
 ---
 
-## Decision 1: Detached Subprocess Execution
+## Decision 5: Detached Subprocess Execution
 
 **Chainsaw is spawned as a fully detached process, independent of the MCP server's process lifetime.**
 
@@ -305,7 +305,7 @@ Windows `DETACHED_PROCESS` / `CREATE_NEW_PROCESS_GROUP` does not reliably inheri
 
 ---
 
-## Decision 2: Disk-Persisted Job State
+## Decision 6: Disk-Persisted Job State
 
 **All job state is written to disk, not held in memory.**
 
@@ -331,7 +331,7 @@ The detached execution model means the process that runs Chainsaw (the runner) i
 
 ---
 
-## Decision 3: Webhook Notification Instead of Polling
+## Decision 7: Webhook Notification Instead of Polling
 
 **Completion is communicated via webhook POST, not by polling a status tool.**
 
@@ -368,7 +368,7 @@ Webhook failures are written to `<job_dir>/webhook_error.log` rather than silent
 
 ---
 
-## Decision 4: Remove `chainsaw_hunt` and `hunt_status` Tools
+## Decision 8: Remove `chainsaw_hunt` and `hunt_status` Tools
 
 **The legacy inline hunt tools were removed from the MCP tool catalogue entirely.**
 
@@ -390,7 +390,7 @@ Removing them eliminates the ambiguity. The tool catalogue is now unambiguous:
 
 ---
 
-## Decision 5: `--skip-errors` Always Enabled
+## Decision 9: `--skip-errors` Always Enabled
 
 **Chainsaw is always invoked with `--skip-errors`.**
 
@@ -400,7 +400,7 @@ The flag is baked into `_build_command()` rather than exposed as a user option b
 
 ---
 
-## Decision 6: No Server-Side LLM Calls (Retained from Original Design)
+## Decision 10: No Server-Side LLM Calls (Retained from Original Design)
 
 **The MCP server makes no LLM calls. All reasoning is provided by the client.**
 
@@ -416,7 +416,7 @@ This was rejected because:
 
 ---
 
-## Decision 7: E01 Preparation Delegated to the Monitor Process
+## Decision 11: E01 Preparation Delegated to the Monitor Process
 
 **E01 extraction is no longer performed synchronously in the MCP tool handler. It runs inside the detached monitor, alongside Chainsaw.**
 
@@ -443,7 +443,7 @@ This was rejected because:
 
 ---
 
-## Decision 8: EVTXs Staged to Job Directory, Not `/tmp`
+## Decision 12: EVTXs Staged to Job Directory, Not `/tmp`
 
 **Extracted EVTXs are written to `<CHAINSAWMCP_JOBS_DIR>/<job_id>/evtx/<source_stem>/` rather than a temporary directory.**
 
@@ -486,7 +486,7 @@ Chainsaw is invoked with `chainsaw hunt <job_dir>/evtx/ --json --skip-errors` an
 
 ---
 
-## Decision 9: `start_bulk_hunt` Tool — Multiple Sources, One Job
+## Decision 13: `start_bulk_hunt` Tool — Multiple Sources, One Job
 
 **A new tool `start_bulk_hunt` accepts a list of evidence paths and processes them in a single Chainsaw run under one job ID.**
 
@@ -514,7 +514,7 @@ start_bulk_hunt(paths=["/evidence/host-dc.E01", "/evidence/host-rd.E01", "/evide
 
 ---
 
-## Updated Tool Catalogue
+## Current Tool Catalogue
 
 | Tool | Purpose |
 |---|---|
@@ -527,7 +527,7 @@ start_bulk_hunt(paths=["/evidence/host-dc.E01", "/evidence/host-rd.E01", "/evide
 
 ---
 
-## Alternatives Considered
+## Alternatives Considered (Detached Hunt Architecture)
 
 | Alternative | Reason Rejected |
 |---|---|
