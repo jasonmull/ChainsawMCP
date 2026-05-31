@@ -2,6 +2,64 @@
 
 ---
 
+# Session Log — 2026-05-18 (Part 1: Initial build)
+
+**Branch:** `claude/build-mcp-server-Our54`
+
+---
+
+## Key Decisions and Findings
+
+1. **The server should make zero LLM calls.** The original design had a full enrichment pipeline (batching, confidence tiering, roll-up synthesis via Ollama). After understanding the actual use cases — Claude Desktop and OpenWebUI — it became clear the client LLM handles this natively. Removing `chainsaw_enrich` simplified the server significantly and eliminated the only external dependency beyond Chainsaw itself.
+
+2. **Chainsaw's CLI has sharp edges.** In a single session: `--rules` should be `--rule`, `--sigma` silently produces nothing without `--mapping`, and a reported `--no-progress` flag doesn't exist. The installed binary's `--help` output is the only reliable source of truth — not docs, not inference from similar tools.
+
+3. **`--mapping` is mandatory for Sigma, not optional.** This is the most dangerous silent failure mode: Sigma rules load without error but match nothing if the mapping file is absent. The guard in `run_hunt()` (raise early if sigma without mapping) prevents a confusing "0 hits" result that looks like clean evidence.
+
+## What Didn't Work
+
+- **`chainsaw_enrich` with Ollama backend:** Built out fully — batching, confidence tiering (HIGH/MEDIUM/LOW), templated responses for LOW-severity rules, roll-up LLM call. Removed after clarifying that both target clients (Claude Desktop, OpenWebUI) are themselves LLMs that handle analysis naturally in conversation.
+- **`--rules` flag (plural):** Rejected by Chainsaw. Corrected to `--rule`.
+- **`--no-progress` flag:** Reported as needed by an external source; does not exist in the installed Chainsaw version. The existing line-by-line JSON parser discards non-JSON lines (including progress output) gracefully — no flag needed.
+
+## Watch Points for Next Session
+
+- **Chainsaw version on the deployment machine matters.** Verify all subprocess flags with `chainsaw hunt --help`. The main branch BUILD_LOG documents a `--preprocess` flag appearing in usage output — not yet explored.
+- **`chainsaw_hunt` blocks the asyncio event loop.** On large evidence sets the MCP transport will hang. Needs `asyncio.to_thread()` + background task + `hunt_status` polling.
+- **State is in-process only.** `_SessionState` lives in memory. Server restart = lost session.
+- **No E01 mounting tested end-to-end.** Linux (`ewfmount`) and Windows (Arsenal Image Mounter) paths implemented but untested against real images.
+- **Dead code in `config.py`:** `get_ollama_base_url()` and `get_ollama_model()` are leftovers from the enrichment design. Clean up before next feature addition.
+
+---
+
+# Session Log — 2026-05-18 (Part 2: Fix asyncio blocking hang)
+
+**Branch:** `claude/fix-chainsaw-timeout-5XwnG`
+
+---
+
+## Key Decisions and Findings
+
+1. **The hang was an asyncio blocking bug, not a timeout config problem.** `subprocess.run()` inside an `async` function blocks the entire event loop — there is no MCP-level timeout you can tune your way out of. The fix is structural: move blocking work to a thread via `asyncio.to_thread()`.
+
+2. **Background task + polling is the right UX pattern for long-running tools in MCP.** The alternative (MCP log notifications) is cleaner in theory but unreliable in practice because client support varies. Polling via a status tool works everywhere.
+
+3. **Don't assume Chainsaw CLI flags are stable across versions.** `--no-progress` was added based on reasonable inference but doesn't exist in the installed binary. Any future flag additions need to be verified against `chainsaw hunt --help` on the actual deployment target.
+
+## What Didn't Work
+
+- **`--no-progress` flag:** Added to suppress progress bar output from polluting the JSON stream. Chainsaw rejected it. Removed. The existing line-by-line JSON parser already handles mixed output gracefully.
+
+## Watch Points for Next Session
+
+- **Chainsaw version mismatch:** Before adding any subprocess arguments, run `chainsaw hunt --help` and confirm the flag exists. Usage line from this session: `chainsaw.exe hunt --json --preprocess <RULES> [PATH]...`
+- **`--preprocess` flag:** Appeared in the usage line but not explored. May affect rule-loading performance.
+- **Poll interval is client-controlled:** The server doesn't enforce how often `hunt_status` is called. An LLM client driving this autonomously will naturally space out calls.
+- **No cancellation yet:** No way to cancel a running hunt. A `cancel_hunt` tool would be a reasonable addition.
+- **State is in-process only:** `_SessionState` lives in memory. MCP server crash mid-hunt = all state lost.
+
+---
+
 # Session Log — 2026-05-30 (Part 1: E01 extraction overhaul)
 
 **Topic:** Remove FUSE mount path, rootless E01 extraction via pytsk3, stdin fix  
