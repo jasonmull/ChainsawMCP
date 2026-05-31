@@ -178,17 +178,21 @@ claude mcp add ChainsawMCP ChainsawMCP \
 
 ### OpenWebUI (local LLM)
 
-Start the server in HTTP mode and configure it as an MCP tool server in OpenWebUI:
+OpenWebUI's native MCP integration does not inject tool schemas into model API calls (tested v0.9.2). Use **mcpo** as an OpenAPI proxy instead:
 
 ```bash
+pip install mcpo
+
 CHAINSAW_BIN=/usr/local/bin/chainsaw \
 CHAINSAW_RULES=/opt/chainsaw/rules \
 CHAINSAWMCP_JOBS_DIR=/opt/chainsawjobs \
 CHAINSAWMCP_WEBHOOK_URL=https://discord.com/api/webhooks/... \
-ChainsawMCP --transport streamable-http
+mcpo --port 8081 -- ChainsawMCP
 ```
 
-Then add `http://localhost:8000/mcp` as an MCP server in OpenWebUI under **Admin → External Tools**. Pair with any locally hosted model — Llama, Mistral, Qwen, or any model with strong instruction-following capability. Evidence never leaves your network.
+Then add `http://localhost:8081` as an **OpenAPI** server in OpenWebUI under **Admin → External Tools → OpenAPI**. Pair with any locally hosted model with tool-calling support — Qwen2.5, Llama 3.1, or Mistral. Evidence never leaves your network.
+
+For models without tool-calling support (e.g. Foundation-Sec-8B-Reasoning), use the OpenWebUI inlet filter in `extras/chainsaw_filter.py` — it runs the full workflow autonomously and passes the results to the model for analysis.
 
 ---
 
