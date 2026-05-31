@@ -2,6 +2,86 @@
 
 ---
 
+# Initial Build
+
+**Date:** 2026-05-18  
+**Status:** Accepted  
+**Deciders:** Jason Mull  
+
+---
+
+## Context
+
+Initial build of the ChainsawMCP server. Core goals: wrap Chainsaw as an MCP tool, handle E01 evidence preparation, return parsed hits to the LLM client for analysis. No server-side LLM calls.
+
+---
+
+## Decision 1: Run Chainsaw as a background asyncio task, poll for status
+
+`chainsaw_hunt` is an `async` MCP tool handler. Originally it called `subprocess.run()` directly — a blocking call that froze the asyncio event loop for the entire duration of the hunt. On large evidence sets (e.g. 296 EVTX files), hunts can take several minutes. The MCP transport's own keepalive/timeout fires before Chainsaw finishes, causing a silent hang from the client's perspective.
+
+**Decision:** Wrap the blocking `subprocess.run()` in `asyncio.to_thread()` so the event loop stays alive. `chainsaw_hunt` now launches a background `asyncio.Task` and returns immediately. A new `hunt_status` tool exposes task state (`idle / running / done / error`), elapsed time, and hit count on completion. The client polls `hunt_status` until the hunt settles.
+
+**Alternative considered — MCP log notifications:** Use `asyncio.create_subprocess_exec()` to read Chainsaw's stderr line-by-line and forward each line as an MCP `notifications/message`. Ruled out because client support for log notifications is inconsistent (Claude Desktop surfaces them, OpenWebUI may not) and Chainsaw's progress output format is not stable across versions. The polling model works with any MCP client.
+
+**Consequences:**
+- Callers must poll `hunt_status` rather than waiting on `chainsaw_hunt` to return results
+- `chainsaw_report` guards against being called before a hunt completes
+- `prepare_evidence` guards against re-staging while a hunt is in flight
+- `CHAINSAW_TIMEOUT` env var (default 1800s) controls the subprocess timeout; previously hardcoded to 600s
+
+---
+
+## Decision 2: Suppress Chainsaw progress output — line-by-line JSON parse, not a flag
+
+Chainsaw writes a progress bar to stdout when `--json` is active. This pollutes the JSON stream and caused parse failures on larger evidence sets.
+
+**Initial attempt:** Pass `--no-progress` to suppress stdout noise. `--no-progress` does not exist in the installed version of Chainsaw — it caused Chainsaw to exit with an error.
+
+**Decision:** Remove `--no-progress`. The `_parse_output()` function parses line-by-line and silently discards any line that fails `json.loads()`, so progress output mixed into stdout is harmlessly dropped. No flag needed.
+
+**Lesson:** Do not add Chainsaw flags without verifying them against the installed binary's `--help` output. Chainsaw's CLI has changed across versions. The usage line from this session: `chainsaw.exe hunt --json --preprocess <RULES> [PATH]...`
+
+---
+
+## Decision 3: No server-side LLM enrichment — client drives analysis
+
+The original design included a `chainsaw_enrich` tool that batched Chainsaw hits by rule/tactic and sent them to Ollama (`foundationsec:8b`) for narrative enrichment before formatting the report. This was built on the assumption that the MCP client might not have strong enough reasoning to analyse raw Chainsaw JSON.
+
+**Decision:** Remove `chainsaw_enrich` entirely. The MCP client — whether Claude Desktop or OpenWebUI with a local model — is already an LLM and can analyse the hunt results directly in conversation. Having the server make its own LLM calls creates a redundant second model invocation and introduces an Ollama dependency that neither target use case actually needs.
+
+**Alternatives considered:**
+- *Keep `chainsaw_enrich` as optional with configurable backend:* The "client" mode would be a no-op; the "ollama" mode duplicates what the client model already does with full conversational context.
+- *Anthropic API backend:* If you have an Anthropic API key, you have Claude Desktop. If you're using OpenWebUI, your local model is the reasoning engine. No gap to fill.
+
+**Consequences:**
+- No Ollama dependency. No API keys. Server makes zero LLM calls.
+- `chainsaw_report` formats raw hits directly — hit counts, severity, sample events per rule.
+- The client LLM provides all narrative analysis interactively, which is better than fire-and-forget batch prompts anyway.
+
+---
+
+## Decision 4: Chainsaw flag correctness — `--rule` (singular) and `--mapping` required for Sigma
+
+Two flag bugs were present in the initial implementation of `_build_command()`:
+
+1. The rules flag was `--rules` (plural). Chainsaw's actual flag is `--rule` (singular).
+2. When using `--sigma`, Chainsaw requires a `--mapping` file that maps Sigma field names to Windows Event Log field names. Without it, Sigma rules load but match nothing silently — no error, no hits.
+
+**Decision:**
+- Correct `--rules` → `--rule`
+- Add `--mapping` as a first-class parameter alongside `--sigma`. Raise `ChainsawError` early if `sigma_path` is provided without a `mapping_path`, rather than letting Chainsaw silently produce zero hits.
+- Add `CHAINSAW_MAPPING` env var. Standard value: `mappings/sigma-event-logs-all.yml` (ships with Chainsaw).
+
+**Lesson:** Do not assume Chainsaw CLI flags match documentation or intuition. Before adding any new subprocess argument, verify it against `chainsaw hunt --help` on the actual installed binary.
+
+**Consequences:**
+- `run_hunt()` now accepts `mapping_path` parameter
+- Missing mapping with Sigma path is a hard error, not a silent failure
+- All three paths (`--rule`, `--sigma`, `--mapping`) are independently configurable via env vars or tool parameters
+
+---
+
 # OpenWebUI / Ollama Integration Strategy
 
 **Date:** 2026-05-24  
@@ -28,7 +108,7 @@ Several interrelated decisions were required:
 
 ---
 
-## Decision 1: Use mcpo (OpenAPI proxy) rather than OpenWebUI's native MCP
+## Decision 5: Use mcpo (OpenAPI proxy) rather than OpenWebUI's native MCP
 
 ### What we tried first
 
@@ -77,7 +157,7 @@ for OpenWebUI.
 
 ---
 
-## Decision 2: Make `chainsaw_hunt` synchronous for tool-calling clients
+## Decision 6: Make `chainsaw_hunt` synchronous for tool-calling clients
 
 ### Context
 
@@ -123,7 +203,7 @@ manual inspection) but is no longer part of the primary workflow.
 
 ---
 
-## Decision 3: Streamable HTTP transport on Windows uses `WindowsSelectorEventLoopPolicy`
+## Decision 7: Streamable HTTP transport on Windows uses `WindowsSelectorEventLoopPolicy`
 
 ### Context
 
@@ -148,7 +228,7 @@ without raising.
 
 ---
 
-## Decision 4: OpenWebUI inlet Filter for base and reasoning models
+## Decision 8: OpenWebUI inlet Filter for base and reasoning models
 
 ### Context
 
@@ -275,7 +355,7 @@ The core incompatibility: **MCP is a request/response protocol with client-side 
 
 ---
 
-## Decision 5: Detached Subprocess Execution
+## Decision 9: Detached Subprocess Execution
 
 **Chainsaw is spawned as a fully detached process, independent of the MCP server's process lifetime.**
 
@@ -305,7 +385,7 @@ Windows `DETACHED_PROCESS` / `CREATE_NEW_PROCESS_GROUP` does not reliably inheri
 
 ---
 
-## Decision 6: Disk-Persisted Job State
+## Decision 10: Disk-Persisted Job State
 
 **All job state is written to disk, not held in memory.**
 
@@ -331,7 +411,7 @@ The detached execution model means the process that runs Chainsaw (the runner) i
 
 ---
 
-## Decision 7: Webhook Notification Instead of Polling
+## Decision 11: Webhook Notification Instead of Polling
 
 **Completion is communicated via webhook POST, not by polling a status tool.**
 
@@ -368,7 +448,7 @@ Webhook failures are written to `<job_dir>/webhook_error.log` rather than silent
 
 ---
 
-## Decision 8: Remove `chainsaw_hunt` and `hunt_status` Tools
+## Decision 12: Remove `chainsaw_hunt` and `hunt_status` Tools
 
 **The legacy inline hunt tools were removed from the MCP tool catalogue entirely.**
 
@@ -390,7 +470,7 @@ Removing them eliminates the ambiguity. The tool catalogue is now unambiguous:
 
 ---
 
-## Decision 9: `--skip-errors` Always Enabled
+## Decision 13: `--skip-errors` Always Enabled
 
 **Chainsaw is always invoked with `--skip-errors`.**
 
@@ -400,7 +480,7 @@ The flag is baked into `_build_command()` rather than exposed as a user option b
 
 ---
 
-## Decision 10: No Server-Side LLM Calls (Retained from Original Design)
+## Decision 14: No Server-Side LLM Calls (Retained from Original Design)
 
 **The MCP server makes no LLM calls. All reasoning is provided by the client.**
 
@@ -416,7 +496,7 @@ This was rejected because:
 
 ---
 
-## Decision 11: E01 Preparation Delegated to the Monitor Process
+## Decision 15: E01 Preparation Delegated to the Monitor Process
 
 **E01 extraction is no longer performed synchronously in the MCP tool handler. It runs inside the detached monitor, alongside Chainsaw.**
 
@@ -443,7 +523,7 @@ This was rejected because:
 
 ---
 
-## Decision 12: EVTXs Staged to Job Directory, Not `/tmp`
+## Decision 16: EVTXs Staged to Job Directory, Not `/tmp`
 
 **Extracted EVTXs are written to `<CHAINSAWMCP_JOBS_DIR>/<job_id>/evtx/<source_stem>/` rather than a temporary directory.**
 
@@ -486,7 +566,7 @@ Chainsaw is invoked with `chainsaw hunt <job_dir>/evtx/ --json --skip-errors` an
 
 ---
 
-## Decision 13: `start_bulk_hunt` Tool — Multiple Sources, One Job
+## Decision 17: `start_bulk_hunt` Tool — Multiple Sources, One Job
 
 **A new tool `start_bulk_hunt` accepts a list of evidence paths and processes them in a single Chainsaw run under one job ID.**
 
