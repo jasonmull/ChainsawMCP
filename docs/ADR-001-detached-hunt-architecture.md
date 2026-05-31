@@ -162,7 +162,115 @@ This was rejected because:
 
 ---
 
-## Alternatives Considered
+## Decision 7: E01 Preparation Delegated to the Monitor Process
+
+**E01 extraction is no longer performed synchronously in the MCP tool handler. It runs inside the detached monitor, alongside Chainsaw.**
+
+### Problem
+
+`start_hunt` originally called `prepare_evidence()` synchronously before spawning the monitor. For large E01 images (3–5 GB), extraction via pytsk3 or TSK CLI takes 3–5 minutes. The MCP client enforces a ~4 minute per-call timeout and cancels the request with `-32001: Request timed out`. The server continued working after cancellation and the hunt eventually started, but:
+
+1. The tool response was discarded — Claude never received the job ID
+2. Calling `prepare_evidence` for a second E01 immediately destroyed the first image's staging directory via `state.evidence.cleanup()`, before the first hunt had started
+3. Large images (>4 min extraction) could not be processed at all via `start_hunt`
+
+### Decision
+
+`start_hunt` now returns immediately for E01 inputs — before touching the filesystem — by delegating preparation to the monitor process. The call sequence is:
+
+1. `start_hunt` creates a job record and spawns the monitor with `{"evidence_path": "..."}` config (instead of a pre-built Chainsaw command)
+2. The monitor detects the dict payload, calls `stage_evtx()` to extract EVTXs, then builds and runs the Chainsaw command itself
+3. The MCP tool call returns in under one second with a job ID
+
+**Consequences:**
+- No E01 extraction can ever timeout an MCP tool call
+- Multiple E01 hunts can be queued immediately; each gets its own monitor
+- The staging directory is no longer tied to the MCP server process lifetime
+
+---
+
+## Decision 8: EVTXs Staged to Job Directory, Not `/tmp`
+
+**Extracted EVTXs are written to `<CHAINSAWMCP_JOBS_DIR>/<job_id>/evtx/<source_stem>/` rather than a temporary directory.**
+
+### Problem
+
+The original staging path was `tempfile.mkdtemp(prefix="chainsawmcp_")` → `/tmp/chainsawmcp_XXXX/evtx/`. This caused two classes of failure:
+
+1. **Path not found after preparation**: The staging dir was created in the MCP server process but the path was referenced by a different process (monitor). System temp cleaners, OS restart, or subtle reference counting issues caused the path to be gone by the time Chainsaw tried to access it.
+2. **No persistence**: If the analyst needed to re-run analysis on the same evidence, the staging dir was gone after `PreparedEvidence.cleanup()` and the E01 had to be extracted again.
+
+### Decision
+
+`stage_evtx(source, dest)` was added to `evidence.py`. It extracts EVTXs directly to a caller-specified destination with no temp dir. The monitor uses:
+
+```
+<job_dir>/evtx/<source_stem>/
+```
+
+For a bulk hunt against three E01 images, the layout is:
+
+```
+ChainsawMCPJobs/
+└── <job_id>/
+    ├── job.json
+    ├── hunt_results.json
+    ├── chainsaw_stderr.log
+    └── evtx/
+        ├── base-rd-01-cdrive/
+        ├── base-dc-cdrive/
+        └── base-file-cdrive/
+```
+
+Chainsaw is invoked with `chainsaw hunt <job_dir>/evtx/ --json --skip-errors` and finds all sources recursively.
+
+**Consequences:**
+- Staging path is deterministic and stable — derived from `CHAINSAWMCP_JOBS_DIR` and job ID, never from system temp
+- No cleanup step; EVTXs persist alongside results for re-analysis
+- `PreparedEvidence` and its cleanup lifecycle are no longer used in the monitor path (only retained for the standalone `prepare_evidence` tool)
+- Job directory accumulates EVTX files (~hundreds of MB per image); `CHAINSAWMCP_JOBS_DIR` should be on a volume with adequate space
+
+---
+
+## Decision 9: `start_bulk_hunt` Tool — Multiple Sources, One Job
+
+**A new tool `start_bulk_hunt` accepts a list of evidence paths and processes them in a single Chainsaw run under one job ID.**
+
+### Problem
+
+Processing multiple E01 images required calling `start_hunt` once per image, producing N separate job IDs and N separate result sets. Loading and correlating results across multiple jobs required the analyst to call `load_hunt_results` repeatedly with different IDs and mentally merge the findings.
+
+### Decision
+
+`start_bulk_hunt` creates one job, spawns one monitor, and produces one `hunt_results.json`. The monitor prepares each source in sequence (staging to `evtx/<source_stem>/`) and invokes Chainsaw once against the combined `evtx/` directory.
+
+```
+start_bulk_hunt(paths=["/evidence/host-dc.E01", "/evidence/host-rd.E01", "/evidence/host-wkstn.E01"])
+→ job ID: a1b2c3d4
+→ monitor prepares all three in background
+→ chainsaw hunt <job_dir>/evtx/ --json
+→ one hunt_results.json with combined findings
+→ one load_hunt_results() call
+```
+
+**Consequences:**
+- All endpoint findings are in a single result set; cross-host correlation is immediate
+- Analyst workflow is unchanged (`load_hunt_results` → `chainsaw_report` → `get_detections`)
+- Sources are prepared sequentially in the monitor; a failure on one source fails the whole job
+
+---
+
+## Updated Tool Catalogue
+
+| Tool | Purpose |
+|---|---|
+| `prepare_evidence` | Synchronous E01 staging for inspection (may timeout on large images — prefer `start_hunt`) |
+| `start_hunt` | Begin a detached hunt against one EVTX dir or E01 image; returns immediately |
+| `start_bulk_hunt` | Begin a detached hunt against multiple E01 images; one job, one result set |
+| `load_hunt_results` | Load completed results into session for analysis |
+| `chainsaw_report` | Structured summary with severity breakdown |
+| `get_detections` | Drill-down by rule name or severity |
+
 
 | Alternative | Reason Rejected |
 |---|---|
