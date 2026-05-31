@@ -70,7 +70,10 @@ Automatic report generation was considered and rejected. A one-shot report canno
 
 ## Features
 
-- **Detached hunt execution** — Chainsaw runs as an independent process; `start_hunt` returns in under one second
+- **Detached hunt execution** — Chainsaw runs as an independent process; `start_hunt` returns in under one second regardless of image size
+- **Bulk hunt support** — `start_bulk_hunt` accepts a list of E01 images and processes them in a single Chainsaw run under one job ID
+- **No E01 timeouts** — extraction happens inside the detached monitor, not in the MCP tool call; even a 5+ minute extraction cannot timeout the client
+- **Stable staging paths** — EVTXs are extracted to `<CHAINSAWMCP_JOBS_DIR>/<job_id>/evtx/<source_name>/`; no temp dirs that can disappear
 - **Webhook notifications** — Discord, Slack, and generic HTTP receivers supported
 - **Persistent job state** — results survive session restarts; load any previous job by ID or automatically pick up the latest
 - **E01 disk image support** — forensic images mounted and EVTXs extracted automatically on both Windows and Linux
@@ -195,19 +198,11 @@ Tools are listed in execution order for a standard workflow.
 
 ---
 
-### 1. `prepare_evidence` _(E01 images only)_
+### 1. `start_hunt`
 
-Mount a forensic E01 image, extract all `.evtx` files, and stage them for Chainsaw. Skip this step for EVTX directories — `start_hunt` handles those directly.
+Start a Chainsaw hunt against an EVTX directory or E01 image. Returns in under one second — all evidence preparation and Chainsaw execution happen inside a fully detached background process with no connection to the MCP session.
 
-| Argument | Type | Description |
-|---|---|---|
-| `path` | string, **required** | Absolute path to an `.E01` file |
-
----
-
-### 2. `start_hunt`
-
-Start a Chainsaw hunt against an EVTX directory or E01 image. Returns in under one second — Chainsaw runs as a fully detached background process with no connection to the MCP session.
+For E01 images, extraction is performed by the background process, so even a 5-minute extraction will not timeout the tool call.
 
 | Argument | Type | Description |
 |---|---|---|
@@ -217,7 +212,25 @@ Start a Chainsaw hunt against an EVTX directory or E01 image. Returns in under o
 | `mapping_path` | string, optional | Override `CHAINSAW_MAPPING` |
 | `extra_args` | array, optional | Extra flags passed verbatim to `chainsaw hunt` |
 
-Returns a job ID and runner PID. A webhook POST fires when the hunt completes. `--skip-errors` is always enabled — a single corrupt log file will not abort the hunt.
+Returns a job ID immediately. EVTXs are staged to `<CHAINSAWMCP_JOBS_DIR>/<job_id>/evtx/<source_name>/`. A webhook POST fires when the hunt completes. `--skip-errors` is always enabled.
+
+---
+
+### 2. `start_bulk_hunt`
+
+Start a single Chainsaw hunt across multiple E01 images or EVTX directories. All sources are staged and analyzed in one Chainsaw run, producing a single combined result set under one job ID.
+
+Use this when processing multiple endpoints from the same engagement — all findings land in one `hunt_results.json` and are loaded with a single `load_hunt_results()` call.
+
+| Argument | Type | Description |
+|---|---|---|
+| `paths` | array, **required** | List of absolute paths to `.E01` files or EVTX directories |
+| `rules_path` | string, optional | Override `CHAINSAW_RULES` for all sources |
+| `sigma_path` | string, optional | Override `CHAINSAW_SIGMA` for all sources |
+| `mapping_path` | string, optional | Override `CHAINSAW_MAPPING` for all sources |
+| `extra_args` | array, optional | Extra flags passed verbatim to `chainsaw hunt` |
+
+Each source is staged to its own subdirectory: `<job_dir>/evtx/<source_stem>/`. Chainsaw is pointed at `<job_dir>/evtx/` and finds all sources recursively.
 
 ---
 
@@ -227,7 +240,7 @@ Load results from a completed hunt into the session for analysis. If `job_id` is
 
 | Argument | Type | Description |
 |---|---|---|
-| `job_id` | string, optional | Job ID from `start_hunt`. Omit to load the latest. |
+| `job_id` | string, optional | Job ID from `start_hunt` or `start_bulk_hunt`. Omit to load the latest. |
 
 ---
 
@@ -249,44 +262,85 @@ Return individual events from the completed hunt, filtered by rule name or sever
 
 ---
 
-## Typical Session
+### `prepare_evidence` _(optional, diagnostic use)_
+
+Synchronously mount a forensic E01 image and stage its EVTXs to a temp directory for inspection. **Not needed for normal hunts** — `start_hunt` and `start_bulk_hunt` handle E01 preparation internally without blocking.
+
+> ⚠️ Large E01 images (3–5 GB) take 3–5 minutes to extract and may hit MCP client timeouts. Use `start_hunt` directly for all production workflows.
+
+| Argument | Type | Description |
+|---|---|---|
+| `path` | string, **required** | Absolute path to an `.E01` file |
+
+---
+
+## Typical Sessions
+
+### Single image
 
 ```
-Analyst:  "Run a hunt on F:\ChainsawEvals"
+Analyst:  "Run a hunt on the DC image"
 
-Claude:   [calls start_hunt("F:\ChainsawEvals")]
-          Hunt started (job ID: f2ef9e2d). Chainsaw is running in the background.
+Claude:   [calls start_hunt("/evidence/base-dc-cdrive.E01")]
+          Hunt started (job ID: 47962594). EVTXs staging to:
+          /ChainsawJobs/47962594/evtx — Chainsaw will follow.
           You'll receive a webhook notification when it's done.
 
-          [Chainsaw runs — takes 3 minutes for 296 files]
+          [Monitor extracts 317 EVTXs, Chainsaw runs — ~10 minutes total]
 
-Discord:  ✅ ChainsawMCP hunt complete (job f2ef9e2d)
-          Hits: 7098 across 74 rules
-          Completed: 2026-05-30T17:53:22Z
-          Call load_hunt_results() in your MCP session to begin analysis.
+Discord:  ✅ ChainsawMCP hunt complete (job 47962594)
+          Hits: 4312 across 23 rules · Completed: 2026-05-31T00:45:11Z
 
 Analyst:  "Analyze the results"
 
 Claude:   [calls load_hunt_results()]
-          Loaded 7,098 hits from job f2ef9e2d (74 rules triggered).
+          [calls chainsaw_report()]
+          42 critical · 75 high · 413 medium · 155 low
 
+          Top detections: Security Audit Logs Cleared, Remote Service Creation,
+          Suspicious PowerShell Execution...
+```
+
+### Multiple endpoints (bulk)
+
+```
+Analyst:  "Hunt all five images — DC, file server, two RD hosts, workstation"
+
+Claude:   [calls start_bulk_hunt([
+            "/evidence/base-dc-cdrive.E01",
+            "/evidence/base-file-cdrive.E01",
+            "/evidence/base-rd-01-cdrive.E01",
+            "/evidence/base-rd-02-cdrive.E01",
+            "/evidence/base-wkstn-01-c-drive.E01"
+          ])]
+          Bulk hunt started (job ID: a1b2c3d4).
+          5 sources — all staging in background.
+
+          [Monitor extracts ~1300 EVTXs across 5 images, Chainsaw runs once]
+
+Discord:  ✅ ChainsawMCP hunt complete (job a1b2c3d4)
+          Hits: 7,098 across 74 rules
+
+Analyst:  "Analyze the results"
+
+Claude:   [calls load_hunt_results()]
           [calls chainsaw_report()]
           78 critical · 75 high · 413 medium · 155 low · 6377 info
 
           Top detections: RDP Session Disconnected, Security Audit Logs Cleared,
-          Suspicious Remote Logon with Explicit Credentials, Remote Service Creation...
+          Suspicious Remote Logon with Explicit Credentials...
 
 Analyst:  "Show me the critical detections"
 
 Claude:   [calls get_detections(severity="critical", limit=50)]
-          [returns and analyses 78 critical events]
+          [analyses 78 critical events across all five hosts]
 
 Analyst:  "The audit log clearing and RDP activity — do these suggest a specific
            attack pattern?"
 
-Claude:   [analyses event timeline, pivots on computer names and timestamps]
-          Based on the sequence: logs were cleared on win10-test at 22:14 UTC,
-          followed immediately by RDP logons from a new source...
+Claude:   [pivots on timestamps and hostnames across all endpoints]
+          Logs were cleared on win10-test at 22:14 UTC, followed immediately
+          by RDP logons from the DC to the workstation...
 ```
 
 ---
@@ -311,24 +365,40 @@ ChainsawMCP/
 ### Job Lifecycle
 
 ```
-start_hunt()
+start_hunt("host.E01")  /  start_bulk_hunt(["host1.E01", "host2.E01"])
     │
     ├─ create_job()          writes job.json { status: "running", pid: ... }
     │
-    ├─ spawn runner          python -m chainsawmcp.monitor <job_id> <cmd_json>
+    ├─ spawn monitor         python -m chainsawmcp.monitor <job_id> <config_json>
     │       │
-    │       ├─ opens hunt_results.json
-    │       ├─ runs chainsaw hunt (blocking, within runner process)
+    │       ├─ status → "preparing"
+    │       ├─ stage_evtx(source) → <job_dir>/evtx/<source_stem>/   (one per source)
+    │       ├─ status → "running"
+    │       ├─ chainsaw hunt <job_dir>/evtx/ --json --skip-errors
     │       ├─ updates job.json { status: "complete", hit_count: ..., completed_at: ... }
     │       └─ POSTs webhook
     │
-    └─ returns immediately to MCP client
+    └─ returns job ID immediately  (< 1 second)
 
 load_hunt_results()
     │
     ├─ reads job.json         finds latest completed job if no job_id given
     ├─ parses hunt_results.json
     └─ populates session state → chainsaw_report / get_detections ready
+```
+
+### Staging Layout
+
+```
+CHAINSAWMCP_JOBS_DIR/
+└── <job_id>/
+    ├── job.json
+    ├── hunt_results.json
+    ├── chainsaw_stderr.log
+    └── evtx/
+        ├── base-dc-cdrive/       ← EVTXs from base-dc-cdrive.E01
+        ├── base-rd-01-cdrive/    ← EVTXs from base-rd-01-cdrive.E01
+        └── base-wkstn-01/        ← EVTXs from base-wkstn-01.E01
 ```
 
 ---
