@@ -183,6 +183,55 @@ def spawn_hunt_detached(
     return runner.pid
 
 
+def spawn_detached_from_evidence(
+    evidence_path: "str | Path",
+    job_id: str,
+    job_dir: Path,
+    rules_path: Path | None = None,
+    sigma_path: Path | None = None,
+    mapping_path: Path | None = None,
+    extra_args: list[str] | None = None,
+) -> int:
+    """Spawn a detached job that prepares evidence AND runs Chainsaw. Returns runner PID.
+
+    Unlike spawn_hunt_detached, this accepts a raw evidence path (E01 or EVTX dir) and
+    delegates all preparation to the monitor process, so the caller returns immediately
+    without any blocking I/O.
+    """
+    config = {
+        "evidence_path": str(evidence_path),
+    }
+    if rules_path:
+        config["rules"] = str(rules_path)
+    if sigma_path:
+        config["sigma"] = str(sigma_path)
+    if mapping_path:
+        config["mapping"] = str(mapping_path)
+    if extra_args:
+        config["extra_args"] = extra_args
+
+    detach: dict = (
+        {"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+        if sys.platform == "win32"
+        else {"start_new_session": True}
+    )
+
+    runner_cmd = [
+        sys.executable, "-m", "chainsawmcp.monitor",
+        job_id,
+        json.dumps(config),
+    ]
+
+    runner = subprocess.Popen(
+        runner_cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        **detach,
+    )
+    return runner.pid
+
+
 def _parse_output_file(path: Path) -> list[dict[str, Any]]:
     """Read and parse Chainsaw's JSON output file."""
     try:

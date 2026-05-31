@@ -20,13 +20,14 @@ def _job_file(job_id: str) -> Path:
     return _job_dir(job_id) / "job.json"
 
 
-def create_job(evtx_path: Path) -> str:
+def create_job(evidence_path: "str | Path") -> str:
     job_id = uuid.uuid4().hex[:8]
     jdir = _job_dir(job_id)
     jdir.mkdir(parents=True, exist_ok=True)
     _write_job(job_id, {
         "job_id": job_id,
-        "evtx_path": str(evtx_path),
+        "evidence_path": str(evidence_path),
+        "evtx_path": None,
         "started_at": _now(),
         "status": "running",
         "pid": None,
