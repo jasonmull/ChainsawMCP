@@ -1,7 +1,5 @@
 # Session Logs — ChainsawMCP
 
-Combined document. Sessions recorded in chronological order.
-
 ---
 
 # Session Log — 2026-05-30
@@ -139,7 +137,6 @@ All 47 existing tests passed throughout. The test suite mocks all subprocess cal
   4. Create GitHub release
   5. Publish to PyPI (optional for hackathon; `pip install git+https://github.com/...` works immediately)
 
----
 ---
 
 # Session Log — 2026-05-31

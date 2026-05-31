@@ -1,10 +1,8 @@
 # Architecture Decision Records — ChainsawMCP
 
-Combined document. Decisions recorded in chronological order.
-
 ---
 
-# ADR-0001: OpenWebUI / Ollama Integration Strategy
+# ADR-001: OpenWebUI / Ollama Integration Strategy
 
 **Date:** 2026-05-24  
 **Status:** Accepted  
@@ -253,9 +251,8 @@ server-side. This was explicitly rejected by the project's design principles:
 the server makes no LLM calls; the MCP client provides all reasoning.
 
 ---
----
 
-# ADR-001: Detached Hunt Execution Architecture
+# ADR-002: Detached Hunt Execution Architecture
 
 **Status:** Accepted  
 **Date:** 2026-05-30  
