@@ -9,7 +9,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent, Tool
 
-from .chainsaw import ChainsawError, HuntResult, run_hunt_async, spawn_detached_from_evidence, spawn_hunt_detached
+from .chainsaw import ChainsawError, HuntResult, run_hunt_async, spawn_detached_config, spawn_detached_from_evidence, spawn_hunt_detached
 from .config import get_http_host, get_http_port, get_jobs_dir, get_output_dir, is_windows
 from .evidence import EvidenceError, PreparedEvidence, prepare_evidence
 from .jobs import (
@@ -295,19 +295,24 @@ async def _start_hunt(args: dict) -> CallToolResult:
         update_job(job_id, pid=runner_pid, evtx_path=str(p))
         evtx_count = len(evtx_files)
     else:
-        # E01 image (or any non-directory) — delegate preparation to monitor so this
-        # call returns immediately without blocking on slow E01 extraction.
+        # E01 image — delegate all preparation to monitor so this returns immediately.
+        # EVTXs will be staged to <job_dir>/evtx/<source_stem>/ by the monitor.
         if not p.exists():
             return _error(f"Path does not exist: {path}")
         job_id = create_job(path)
         jdir = get_jobs_dir() / job_id
-        runner_pid = spawn_detached_from_evidence(
-            path, job_id, jdir,
-            rules_path=rules, sigma_path=sigma,
-            mapping_path=mapping, extra_args=extra,
-        )
+        config: dict = {"evidence_path": path}
+        if rules:
+            config["rules"] = str(rules)
+        if sigma:
+            config["sigma"] = str(sigma)
+        if mapping:
+            config["mapping"] = str(mapping)
+        if extra:
+            config["extra_args"] = extra
+        runner_pid = spawn_detached_config(job_id, config)
         update_job(job_id, pid=runner_pid)
-        evtx_count = None  # unknown until monitor finishes prep
+        evtx_count = None  # unknown until monitor finishes staging
 
     from .config import get_webhook_url
     webhook_note = (
@@ -317,10 +322,12 @@ async def _start_hunt(args: dict) -> CallToolResult:
     )
 
     evtx_line = f"  EVTX files: {evtx_count}\n" if evtx_count is not None else ""
+    staging_line = f"  EVTXs staging to: {jdir / 'evtx'}\n" if evtx_count is None else ""
     return _ok(
         f"Hunt started (job ID: {job_id}).\n"
         f"  Evidence : {path}\n"
         f"{evtx_line}"
+        f"{staging_line}"
         f"  Runner PID: {runner_pid}\n"
         f"  Results will be written to: {jdir / 'hunt_results.json'}\n"
         f"  {webhook_note}\n\n"
@@ -336,65 +343,66 @@ async def _start_bulk_hunt(args: dict) -> CallToolResult:
     if not paths:
         return _error("'paths' must be a non-empty list of evidence paths.")
 
+    # Validate all paths before creating any job
+    errors = []
+    valid_paths = []
+    for path in paths:
+        p = Path(path)
+        if not p.exists():
+            errors.append(f"  SKIP {path} — path does not exist")
+        else:
+            valid_paths.append(path)
+
+    if not valid_paths:
+        lines = ["No valid evidence paths provided."] + errors
+        return _error("\n".join(lines))
+
     rules = Path(args["rules_path"]) if args.get("rules_path") else None
     sigma = Path(args["sigma_path"]) if args.get("sigma_path") else None
     mapping = Path(args["mapping_path"]) if args.get("mapping_path") else None
     extra = args.get("extra_args") or []
 
+    # All sources go into ONE job — the monitor prepares each source and runs
+    # chainsaw once with all staging dirs as positional arguments.
+    job_id = create_job(f"bulk:{','.join(valid_paths)}")
+    jdir = get_jobs_dir() / job_id
+    update_job(job_id, evidence_paths=valid_paths)
+
+    config: dict = {"evidence_paths": valid_paths}
+    if rules:
+        config["rules"] = str(rules)
+    if sigma:
+        config["sigma"] = str(sigma)
+    if mapping:
+        config["mapping"] = str(mapping)
+    if extra:
+        config["extra_args"] = extra
+
+    runner_pid = spawn_detached_config(job_id, config)
+    update_job(job_id, pid=runner_pid)
+
     from .config import get_webhook_url
     webhook_note = (
-        "A webhook POST will be sent to your configured URL when each hunt finishes."
+        "A webhook POST will be sent to your configured URL when the hunt finishes."
         if get_webhook_url()
-        else "No webhook configured — set CHAINSAWMCP_WEBHOOK_URL to receive notifications."
+        else "No webhook configured — set CHAINSAWMCP_WEBHOOK_URL to receive a notification."
     )
 
-    lines = [f"Started {len(paths)} hunt job(s):\n"]
-    errors = []
-
-    for path in paths:
-        p = Path(path)
-        try:
-            if p.is_dir():
-                evtx_files = list(p.rglob("*.evtx"))
-                if not evtx_files:
-                    errors.append(f"  SKIP {path} — no .evtx files found")
-                    continue
-                job_id = create_job(path)
-                jdir = get_jobs_dir() / job_id
-                runner_pid = spawn_hunt_detached(
-                    p, job_id, jdir,
-                    rules_path=rules, sigma_path=sigma,
-                    mapping_path=mapping, extra_args=extra,
-                )
-                update_job(job_id, pid=runner_pid, evtx_path=str(p))
-                lines.append(f"  job {job_id} — {path} ({len(evtx_files)} EVTX files, PID {runner_pid})")
-            else:
-                if not p.exists():
-                    errors.append(f"  SKIP {path} — path does not exist")
-                    continue
-                job_id = create_job(path)
-                jdir = get_jobs_dir() / job_id
-                runner_pid = spawn_detached_from_evidence(
-                    path, job_id, jdir,
-                    rules_path=rules, sigma_path=sigma,
-                    mapping_path=mapping, extra_args=extra,
-                )
-                update_job(job_id, pid=runner_pid)
-                lines.append(f"  job {job_id} — {path} (E01, extracting in background, PID {runner_pid})")
-        except ChainsawError as e:
-            errors.append(f"  ERROR {path} — {e}")
-
-    if errors:
-        lines.append("")
-        lines += errors
-
-    lines += [
+    source_lines = "\n".join(f"    {p}" for p in valid_paths)
+    lines = [
+        f"Bulk hunt started (job ID: {job_id}).",
+        f"  Sources ({len(valid_paths)}): \n{source_lines}",
+        f"  Runner PID: {runner_pid}",
+        f"  Results will be written to: {jdir / 'hunt_results.json'}",
+        f"  {webhook_note}",
         "",
-        webhook_note,
-        "",
-        "When each hunt completes, call load_hunt_results(job_id=<id>) to load results.",
-        "Then call chainsaw_report to analyze.",
+        "All sources will be prepared and analyzed in a single Chainsaw run.",
+        "IMPORTANT: This is a fully independent background process — do NOT poll.",
+        "When the webhook fires, call load_hunt_results() to load the combined results.",
     ]
+    if errors:
+        lines += ["", "Skipped (not found):"] + errors
+
     return _ok("\n".join(lines))
 
 

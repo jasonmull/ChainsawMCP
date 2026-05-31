@@ -109,14 +109,18 @@ def run_hunt(
 
 
 def _build_command(
-    evtx_dir: Path,
+    evtx_dir: "Path | list[Path]",
     rules_path: Path | None,
     sigma_path: Path | None,
     mapping_path: Path | None,
     extra_args: list[str],
 ) -> list[str]:
     binary = get_chainsaw_binary()
-    cmd = [str(binary), "hunt", str(evtx_dir), "--json", "--skip-errors"]
+    if isinstance(evtx_dir, list):
+        paths = [str(p) for p in evtx_dir]
+    else:
+        paths = [str(evtx_dir)]
+    cmd = [str(binary), "hunt"] + paths + ["--json", "--skip-errors"]
 
     if rules_path:
         cmd += ["--rule", str(rules_path)]
@@ -183,6 +187,23 @@ def spawn_hunt_detached(
     return runner.pid
 
 
+def spawn_detached_config(job_id: str, config: dict) -> int:
+    """Spawn a detached monitor with an arbitrary config dict. Returns runner PID."""
+    detach: dict = (
+        {"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+        if sys.platform == "win32"
+        else {"start_new_session": True}
+    )
+    runner = subprocess.Popen(
+        [sys.executable, "-m", "chainsawmcp.monitor", job_id, json.dumps(config)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        **detach,
+    )
+    return runner.pid
+
+
 def spawn_detached_from_evidence(
     evidence_path: "str | Path",
     job_id: str,
@@ -192,15 +213,8 @@ def spawn_detached_from_evidence(
     mapping_path: Path | None = None,
     extra_args: list[str] | None = None,
 ) -> int:
-    """Spawn a detached job that prepares evidence AND runs Chainsaw. Returns runner PID.
-
-    Unlike spawn_hunt_detached, this accepts a raw evidence path (E01 or EVTX dir) and
-    delegates all preparation to the monitor process, so the caller returns immediately
-    without any blocking I/O.
-    """
-    config = {
-        "evidence_path": str(evidence_path),
-    }
+    """Spawn a detached job that prepares evidence AND runs Chainsaw. Returns runner PID."""
+    config: dict = {"evidence_path": str(evidence_path)}
     if rules_path:
         config["rules"] = str(rules_path)
     if sigma_path:
@@ -216,14 +230,8 @@ def spawn_detached_from_evidence(
         else {"start_new_session": True}
     )
 
-    runner_cmd = [
-        sys.executable, "-m", "chainsawmcp.monitor",
-        job_id,
-        json.dumps(config),
-    ]
-
     runner = subprocess.Popen(
-        runner_cmd,
+        [sys.executable, "-m", "chainsawmcp.monitor", job_id, json.dumps(config)],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

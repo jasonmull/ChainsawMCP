@@ -38,6 +38,30 @@ class PreparedEvidence:
             shutil.rmtree(self._temp_dir, ignore_errors=True)
 
 
+def stage_evtx(source: Path, dest: Path) -> None:
+    """Extract/copy EVTXs from source directly into dest. No temp dirs created.
+
+    For E01 images this is the preferred path for background jobs — EVTXs land
+    in the job's own directory so they persist alongside hunt results and require
+    no separate cleanup step.
+    """
+    if not source.exists():
+        raise EvidenceError(f"Path does not exist: {source}")
+    dest.mkdir(parents=True, exist_ok=True)
+
+    if source.is_dir():
+        _copy_evtx_files(source, dest)
+    elif source.suffix.lower() in {".e01", ".ex01"}:
+        if is_windows():
+            _stage_e01_windows(source, dest)
+        else:
+            _extract_e01(source, dest)
+    else:
+        raise EvidenceError(
+            f"Unsupported evidence type: {source.suffix}. Expected a directory or .E01 image."
+        )
+
+
 def prepare_evidence(path: str) -> PreparedEvidence:
     """Detect evidence type, mount if needed, return a PreparedEvidence with staged EVTXs."""
     p = Path(path)
@@ -315,6 +339,21 @@ def _ntfs_offset_via_mmls(image: Path) -> int | None:
 # ---------------------------------------------------------------------------
 # Windows path
 # ---------------------------------------------------------------------------
+
+def _stage_e01_windows(first_segment: Path, dest: Path) -> None:
+    """Mount with AIM, copy EVTXs to dest, then unmount. No temp dir needed."""
+    aim = _find_aim_cli()
+    if not aim:
+        raise EvidenceError(
+            "Arsenal Image Mounter (aim_cli.exe) not found. Add it to PATH or set AIM_CLI env var."
+        )
+    drive = _pick_free_drive()
+    try:
+        _run([str(aim), "/mount", f"/filename={first_segment}", f"/drive={drive}", "/readonly"])
+        _copy_evtx_files(Path(f"{drive}:\\"), dest)
+    finally:
+        subprocess.run([str(aim), "/unmount", f"/drive={drive}"], capture_output=True)
+
 
 def _prepare_e01_windows(first_segment: Path) -> PreparedEvidence:
     aim = _find_aim_cli()
