@@ -295,19 +295,24 @@ async def _start_hunt(args: dict) -> CallToolResult:
         update_job(job_id, pid=runner_pid, evtx_path=str(p))
         evtx_count = len(evtx_files)
     else:
-        # E01 image (or any non-directory) — delegate preparation to monitor so this
-        # call returns immediately without blocking on slow E01 extraction.
+        # E01 image — delegate all preparation to monitor so this returns immediately.
+        # EVTXs will be staged to <job_dir>/evtx/<source_stem>/ by the monitor.
         if not p.exists():
             return _error(f"Path does not exist: {path}")
         job_id = create_job(path)
         jdir = get_jobs_dir() / job_id
-        runner_pid = spawn_detached_from_evidence(
-            path, job_id, jdir,
-            rules_path=rules, sigma_path=sigma,
-            mapping_path=mapping, extra_args=extra,
-        )
+        config: dict = {"evidence_path": path}
+        if rules:
+            config["rules"] = str(rules)
+        if sigma:
+            config["sigma"] = str(sigma)
+        if mapping:
+            config["mapping"] = str(mapping)
+        if extra:
+            config["extra_args"] = extra
+        runner_pid = spawn_detached_config(job_id, config)
         update_job(job_id, pid=runner_pid)
-        evtx_count = None  # unknown until monitor finishes prep
+        evtx_count = None  # unknown until monitor finishes staging
 
     from .config import get_webhook_url
     webhook_note = (
@@ -317,10 +322,12 @@ async def _start_hunt(args: dict) -> CallToolResult:
     )
 
     evtx_line = f"  EVTX files: {evtx_count}\n" if evtx_count is not None else ""
+    staging_line = f"  EVTXs staging to: {jdir / 'evtx'}\n" if evtx_count is None else ""
     return _ok(
         f"Hunt started (job ID: {job_id}).\n"
         f"  Evidence : {path}\n"
         f"{evtx_line}"
+        f"{staging_line}"
         f"  Runner PID: {runner_pid}\n"
         f"  Results will be written to: {jdir / 'hunt_results.json'}\n"
         f"  {webhook_note}\n\n"
