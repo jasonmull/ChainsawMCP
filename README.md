@@ -168,11 +168,11 @@ Add to `claude_desktop_config.json`:
 
 ```bash
 claude mcp add ChainsawMCP ChainsawMCP \
-  -e CHAINSAW_BIN=/usr/local/bin/chainsaw \
+  -e CHAINSAW_BIN=/opt/chainsaw/target/release/chainsaw \
   -e CHAINSAW_RULES=/opt/chainsaw/rules \
-  -e CHAINSAW_SIGMA=/opt/chainsaw/sigma/rules \
+  -e CHAINSAW_SIGMA=/opt/sigma/sigma/rules \
   -e CHAINSAW_MAPPING=/opt/chainsaw/mappings/sigma-event-logs-all.yml \
-  -e CHAINSAWMCP_JOBS_DIR=/opt/chainsawjobs \
+  -e CHAINSAWMCP_JOBS_DIR=/home/sansforensics/chainsawjobs \
   -e CHAINSAWMCP_WEBHOOK_URL=https://hooks.slack.com/...
 ```
 
