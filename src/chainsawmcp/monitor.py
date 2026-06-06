@@ -161,11 +161,40 @@ def _write_provenance(job_id: str, cmd: list[str], results_file: Path, completed
         pass
 
 
-def _fail_job(job_id: str, error: str) -> None:
+def _classify_error(stderr: str, returncode: int) -> str:
+    """Map common Chainsaw failure patterns to actionable suggested fixes."""
+    s = stderr.lower()
+    if "mapping" in s and any(p in s for p in ("not found", "missing", "no such file", "required")):
+        return "Mapping file missing — run setup_environment or set CHAINSAW_MAPPING"
+    if "sigma" in s and any(p in s for p in ("not found", "no such file", "failed to read", "no sigma", "0 sigma")):
+        return "Sigma rules not found — run setup_environment or set CHAINSAW_SIGMA"
+    if any(p in s for p in ("command not found", "no such file or directory")) and any(b in s for b in ("chainsaw", cmd_name)):
+        return "Chainsaw binary not found — run setup_environment"
+    if any(p in s for p in ("no evtx", "no .evtx", "0 evtx", "found 0")):
+        return "No EVTX files found at the specified path — verify evidence path"
+    if "rules" in s and any(p in s for p in ("not found", "no such file", "0 rules")):
+        return "Chainsaw rules not found — run setup_environment or set CHAINSAW_RULES"
+    if returncode != 0:
+        return "Chainsaw exited with an error — inspect stderr field for details"
+    return "Hunt failed unexpectedly — check chainsaw_stderr.log in the job directory"
+
+
+cmd_name = "chainsaw"  # module-level fallback for _classify_error
+
+
+def _fail_job(job_id: str, error: str, exit_code: int | None = None, stderr: str = "") -> None:
     completed_at = _now()
+    suggested_fix = _classify_error(stderr, exit_code or -1) if stderr or exit_code else error
     data = _read_job(job_id)
-    data.update({"status": "error", "error": error, "completed_at": completed_at,
-                 "hit_count": 0, "rules_triggered": 0})
+    data.update({
+        "status": "error",
+        "error": error,
+        "exit_code": exit_code,
+        "suggested_fix": suggested_fix,
+        "completed_at": completed_at,
+        "hit_count": 0,
+        "rules_triggered": 0,
+    })
     _write_job(job_id, data)
     webhook_url = os.environ.get("CHAINSAWMCP_WEBHOOK_URL")
     if webhook_url:
@@ -294,11 +323,20 @@ def main() -> None:
         hit_count, rules_triggered = _count_hits(job_id)
         status = "complete"
         error = None
+        exit_code_final = returncode
+        suggested_fix = None
         _write_provenance(job_id, cmd, results_file, completed_at)
     else:
         hit_count, rules_triggered = 0, 0
         status = "error"
         error = error_detail or "No results produced"
+        exit_code_final = returncode
+        stderr_text = ""
+        try:
+            stderr_text = log_file.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            pass
+        suggested_fix = _classify_error(stderr_text, returncode)
 
     data = _read_job(job_id)
     data.update({
@@ -307,6 +345,8 @@ def main() -> None:
         "rules_triggered": rules_triggered,
         "completed_at": completed_at,
         "error": error,
+        "exit_code": exit_code_final,
+        "suggested_fix": suggested_fix,
     })
     _write_job(job_id, data)
 

@@ -296,7 +296,24 @@ async def load_hunt_results(job_id: str = "") -> str:
                 "Wait for the webhook notification, then call load_hunt_results() again."
             )
     elif status == "error":
-        raise ValueError(f"Job {job_id} failed: {job.get('error', 'unknown error')}")
+        import json as _json
+        stderr_snippet = ""
+        lpath = get_jobs_dir() / job_id / "chainsaw_stderr.log"
+        if lpath.exists():
+            try:
+                stderr_snippet = lpath.read_text(encoding="utf-8", errors="replace").strip()[-500:]
+            except OSError:
+                pass
+        error_payload = {
+            "status": "error",
+            "job_id": job_id,
+            "error": job.get("error", "unknown error"),
+            "exit_code": job.get("exit_code"),
+            "stderr": stderr_snippet,
+            "suggested_fix": job.get("suggested_fix") or "Check chainsaw_stderr.log in the job directory",
+            "attempt": job.get("attempt", 1),
+        }
+        raise ValueError(_json.dumps(error_payload, indent=2))
 
     rpath = results_path(job_id)
     if not rpath.exists() or rpath.stat().st_size == 0:
