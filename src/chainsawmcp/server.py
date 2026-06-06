@@ -5,13 +5,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import CallToolResult, TextContent, Tool
+from mcp.server.fastmcp import FastMCP
 
 from .chainsaw import ChainsawError, HuntResult, run_hunt_async, spawn_detached_config, spawn_detached_from_evidence, spawn_hunt_detached
 from .config import get_http_host, get_http_port, get_jobs_dir, get_output_dir, is_windows
-from .evidence import EvidenceError, PreparedEvidence, prepare_evidence
+from .evidence import EvidenceError, PreparedEvidence
+from .evidence import prepare_evidence as _stage_evidence
 from .jobs import (
     create_job,
     get_latest_completed_job,
@@ -21,9 +20,10 @@ from .jobs import (
     results_path,
     update_job,
 )
-from .report import format_summary, get_detections, write_full_report
+from .report import format_summary, write_full_report
+from .report import get_detections as _filter_detections
 
-app = Server("ChainsawMCP")
+mcp = FastMCP("ChainsawMCP")
 
 
 class _SessionState:
@@ -44,205 +44,33 @@ state = _SessionState()
 
 
 # ---------------------------------------------------------------------------
-# Tool catalogue
+# Tools
 # ---------------------------------------------------------------------------
 
-@app.list_tools()
-async def list_tools() -> list[Tool]:
-    return [
-        Tool(
-            name="prepare_evidence",
-            description=(
-                "Mounts an E01 image and stages EVTXs synchronously. "
-                "WARNING: large E01 images take 3-5 minutes and may hit MCP timeouts — "
-                "prefer start_hunt or start_bulk_hunt which handle preparation in the background. "
-                "Use prepare_evidence only if you need to inspect the staging directory before hunting."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute path to an EVTX directory or .E01 image file.",
-                    }
-                },
-                "required": ["path"],
-            },
-        ),
-        Tool(
-            name="chainsaw_report",
-            description=(
-                "Write the full hunt report to disk and return a concise summary with severity "
-                "breakdown and top detections. Call after load_hunt_results. "
-                "Use get_detections to drill into specific rules."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        ),
-        Tool(
-            name="start_hunt",
-            description=(
-                "Start a Chainsaw hunt against an EVTX directory or E01 image. "
-                "Returns immediately — Chainsaw runs as a fully detached process and cannot time out. "
-                "A webhook POST is sent to CHAINSAWMCP_WEBHOOK_URL when the hunt finishes. "
-                "Once notified, call load_hunt_results() then chainsaw_report to begin analysis."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute path to an EVTX directory or .E01 image file.",
-                    },
-                    "rules_path": {
-                        "type": "string",
-                        "description": "Path to Chainsaw rules directory (overrides CHAINSAW_RULES).",
-                    },
-                    "sigma_path": {
-                        "type": "string",
-                        "description": "Path to Sigma rules directory (overrides CHAINSAW_SIGMA).",
-                    },
-                    "mapping_path": {
-                        "type": "string",
-                        "description": "Path to Sigma mapping file (overrides CHAINSAW_MAPPING). Required when using sigma_path.",
-                    },
-                    "extra_args": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Extra arguments passed verbatim to chainsaw hunt.",
-                    },
-                },
-                "required": ["path"],
-            },
-        ),
-        Tool(
-            name="start_bulk_hunt",
-            description=(
-                "Start Chainsaw hunts against multiple E01 images or EVTX directories in one call. "
-                "Spawns one independent background job per path and returns all job IDs immediately — "
-                "no MCP timeout possible. Each hunt fires a webhook when done. "
-                "Call load_hunt_results(job_id=...) for each job to load results for analysis."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "paths": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "List of absolute paths to E01 images or EVTX directories.",
-                    },
-                    "rules_path": {
-                        "type": "string",
-                        "description": "Path to Chainsaw rules directory applied to all hunts (overrides CHAINSAW_RULES).",
-                    },
-                    "sigma_path": {
-                        "type": "string",
-                        "description": "Path to Sigma rules directory applied to all hunts (overrides CHAINSAW_SIGMA).",
-                    },
-                    "mapping_path": {
-                        "type": "string",
-                        "description": "Path to Sigma mapping file applied to all hunts (overrides CHAINSAW_MAPPING).",
-                    },
-                    "extra_args": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Extra arguments passed verbatim to chainsaw hunt for all jobs.",
-                    },
-                },
-                "required": ["paths"],
-            },
-        ),
-        Tool(
-            name="load_hunt_results",
-            description=(
-                "Load results from a completed detached hunt into the session for analysis. "
-                "If job_id is omitted, loads the most recently completed hunt automatically. "
-                "Call chainsaw_report and get_detections after this."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "job_id": {
-                        "type": "string",
-                        "description": "Job ID returned by start_hunt. Omit to load the latest completed hunt.",
-                    }
-                },
-                "required": [],
-            },
-        ),
-        Tool(
-            name="get_detections",
-            description=(
-                "Return individual events from the completed hunt, optionally filtered by rule name "
-                "(substring match) or severity level. Use this to investigate specific detections "
-                "after chainsaw_report shows the summary."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "rule": {
-                        "type": "string",
-                        "description": "Filter events whose rule name contains this string (case-insensitive).",
-                    },
-                    "severity": {
-                        "type": "string",
-                        "description": "Filter by exact severity level, e.g. 'critical', 'high', 'medium', 'low'.",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of events to return (default 25).",
-                    },
-                },
-                "required": [],
-            },
-        ),
-    ]
+@mcp.tool()
+async def prepare_evidence(path: str) -> str:
+    """Mounts an E01 image and stages EVTXs synchronously.
 
-
-# ---------------------------------------------------------------------------
-# Tool dispatch
-# ---------------------------------------------------------------------------
-
-@app.call_tool()
-async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
-    handlers = {
-        "prepare_evidence": _prepare_evidence,
-        "start_hunt": _start_hunt,
-        "start_bulk_hunt": _start_bulk_hunt,
-        "load_hunt_results": _load_hunt_results,
-        "chainsaw_report": _chainsaw_report,
-        "get_detections": _get_detections,
-    }
-    handler = handlers.get(name)
-    if handler is None:
-        return _error(f"Unknown tool: {name}")
-    return await handler(arguments)
-
-
-# ---------------------------------------------------------------------------
-# Handlers
-# ---------------------------------------------------------------------------
-
-async def _prepare_evidence(args: dict) -> CallToolResult:
-    path = args.get("path", "").strip()
+    WARNING: large E01 images take 3-5 minutes and may hit MCP timeouts —
+    prefer start_hunt or start_bulk_hunt which handle preparation in the background.
+    Use prepare_evidence only if you need to inspect the staging directory before hunting.
+    """
+    path = path.strip()
     if not path:
-        return _error("'path' argument is required.")
+        raise ValueError("'path' argument is required.")
 
     if state.hunt_status == "running":
-        return _error("A hunt is currently running. Wait for it to finish before re-staging evidence.")
+        raise ValueError("A hunt is currently running. Wait for it to finish before re-staging evidence.")
 
     if state.evidence:
         state.evidence.cleanup()
 
     try:
-        ev = prepare_evidence(path)
+        ev = _stage_evidence(path)
     except EvidenceError as e:
-        return _error(str(e))
+        raise ValueError(str(e)) from e
     except Exception as e:
-        return _error(f"Unexpected error preparing evidence: {type(e).__name__}: {e}")
+        raise ValueError(f"Unexpected error preparing evidence: {type(e).__name__}: {e}") from e
 
     state.evidence = ev
     state.hits = []
@@ -255,7 +83,7 @@ async def _prepare_evidence(args: dict) -> CallToolResult:
     state.hunt_error = ""
 
     evtx_count = len(list(ev.evtx_dir.rglob("*.evtx")))
-    return _ok(
+    return (
         f"Evidence prepared.\n"
         f"  Source : {path}\n"
         f"  EVTX files staged: {evtx_count}\n"
@@ -264,23 +92,35 @@ async def _prepare_evidence(args: dict) -> CallToolResult:
     )
 
 
-async def _start_hunt(args: dict) -> CallToolResult:
-    path = args.get("path", "").strip()
-    if not path:
-        return _error("'path' argument is required.")
+@mcp.tool()
+async def start_hunt(
+    path: str,
+    rules_path: str = "",
+    sigma_path: str = "",
+    mapping_path: str = "",
+    extra_args: list[str] | None = None,
+) -> str:
+    """Start a Chainsaw hunt against an EVTX directory or E01 image.
 
-    rules = Path(args["rules_path"]) if args.get("rules_path") else None
-    sigma = Path(args["sigma_path"]) if args.get("sigma_path") else None
-    mapping = Path(args["mapping_path"]) if args.get("mapping_path") else None
-    extra = args.get("extra_args") or []
+    Returns immediately — Chainsaw runs as a fully detached process and cannot time out.
+    A webhook POST is sent to CHAINSAWMCP_WEBHOOK_URL when the hunt finishes.
+    Once notified, call load_hunt_results() then chainsaw_report to begin analysis.
+    """
+    path = path.strip()
+    if not path:
+        raise ValueError("'path' argument is required.")
+
+    rules = Path(rules_path) if rules_path else None
+    sigma = Path(sigma_path) if sigma_path else None
+    mapping = Path(mapping_path) if mapping_path else None
+    extra = extra_args or []
 
     p = Path(path)
 
     if p.is_dir():
-        # EVTX directory — validate and count files synchronously (fast), then spawn
         evtx_files = list(p.rglob("*.evtx"))
         if not evtx_files:
-            return _error(f"No .evtx files found under {path}")
+            raise ValueError(f"No .evtx files found under {path}")
         job_id = create_job(path)
         jdir = get_jobs_dir() / job_id
         try:
@@ -291,14 +131,12 @@ async def _start_hunt(args: dict) -> CallToolResult:
             )
         except ChainsawError as e:
             update_job(job_id, status="error", error=str(e))
-            return _error(str(e))
+            raise ValueError(str(e)) from e
         update_job(job_id, pid=runner_pid, evtx_path=str(p))
-        evtx_count = len(evtx_files)
+        evtx_count: int | None = len(evtx_files)
     else:
-        # E01 image — delegate all preparation to monitor so this returns immediately.
-        # EVTXs will be staged to <job_dir>/evtx/<source_stem>/ by the monitor.
         if not p.exists():
-            return _error(f"Path does not exist: {path}")
+            raise ValueError(f"Path does not exist: {path}")
         job_id = create_job(path)
         jdir = get_jobs_dir() / job_id
         config: dict = {"evidence_path": path}
@@ -312,7 +150,7 @@ async def _start_hunt(args: dict) -> CallToolResult:
             config["extra_args"] = extra
         runner_pid = spawn_detached_config(job_id, config)
         update_job(job_id, pid=runner_pid)
-        evtx_count = None  # unknown until monitor finishes staging
+        evtx_count = None
 
     from .config import get_webhook_url
     webhook_note = (
@@ -323,7 +161,7 @@ async def _start_hunt(args: dict) -> CallToolResult:
 
     evtx_line = f"  EVTX files: {evtx_count}\n" if evtx_count is not None else ""
     staging_line = f"  EVTXs staging to: {jdir / 'evtx'}\n" if evtx_count is None else ""
-    return _ok(
+    return (
         f"Hunt started (job ID: {job_id}).\n"
         f"  Evidence : {path}\n"
         f"{evtx_line}"
@@ -338,12 +176,23 @@ async def _start_hunt(args: dict) -> CallToolResult:
     )
 
 
-async def _start_bulk_hunt(args: dict) -> CallToolResult:
-    paths = args.get("paths") or []
-    if not paths:
-        return _error("'paths' must be a non-empty list of evidence paths.")
+@mcp.tool()
+async def start_bulk_hunt(
+    paths: list[str],
+    rules_path: str = "",
+    sigma_path: str = "",
+    mapping_path: str = "",
+    extra_args: list[str] | None = None,
+) -> str:
+    """Start Chainsaw hunts against multiple E01 images or EVTX directories in one call.
 
-    # Validate all paths before creating any job
+    Spawns one independent background job per path and returns all job IDs immediately —
+    no MCP timeout possible. Each hunt fires a webhook when done.
+    Call load_hunt_results(job_id=...) for each job to load results for analysis.
+    """
+    if not paths:
+        raise ValueError("'paths' must be a non-empty list of evidence paths.")
+
     errors = []
     valid_paths = []
     for path in paths:
@@ -355,15 +204,13 @@ async def _start_bulk_hunt(args: dict) -> CallToolResult:
 
     if not valid_paths:
         lines = ["No valid evidence paths provided."] + errors
-        return _error("\n".join(lines))
+        raise ValueError("\n".join(lines))
 
-    rules = Path(args["rules_path"]) if args.get("rules_path") else None
-    sigma = Path(args["sigma_path"]) if args.get("sigma_path") else None
-    mapping = Path(args["mapping_path"]) if args.get("mapping_path") else None
-    extra = args.get("extra_args") or []
+    rules = Path(rules_path) if rules_path else None
+    sigma = Path(sigma_path) if sigma_path else None
+    mapping = Path(mapping_path) if mapping_path else None
+    extra = extra_args or []
 
-    # All sources go into ONE job — the monitor prepares each source and runs
-    # chainsaw once with all staging dirs as positional arguments.
     job_id = create_job(f"bulk:{','.join(valid_paths)}")
     jdir = get_jobs_dir() / job_id
     update_job(job_id, evidence_paths=valid_paths)
@@ -403,16 +250,21 @@ async def _start_bulk_hunt(args: dict) -> CallToolResult:
     if errors:
         lines += ["", "Skipped (not found):"] + errors
 
-    return _ok("\n".join(lines))
+    return "\n".join(lines)
 
 
-async def _load_hunt_results(args: dict) -> CallToolResult:
-    job_id = args.get("job_id", "").strip() or None
+@mcp.tool()
+async def load_hunt_results(job_id: str = "") -> str:
+    """Load results from a completed detached hunt into the session for analysis.
+
+    If job_id is omitted, loads the most recently completed hunt automatically.
+    Call chainsaw_report and get_detections after this.
+    """
+    job_id = job_id.strip() or None  # type: ignore[assignment]
 
     if job_id is None:
         job_id = get_latest_completed_job()
         if job_id is None:
-            # Check if any job is still running
             jobs_dir = get_jobs_dir()
             running = []
             if jobs_dir.exists():
@@ -425,34 +277,30 @@ async def _load_hunt_results(args: dict) -> CallToolResult:
                     except Exception:
                         pass
             if running:
-                return _error(
+                raise ValueError(
                     f"No completed hunts found. Hunt(s) still running: {', '.join(running)}.\n"
                     "Wait for the webhook notification, then call load_hunt_results() again."
                 )
-            return _error(
-                "No completed hunt results found. Run start_hunt to begin a hunt."
-            )
+            raise ValueError("No completed hunt results found. Run start_hunt to begin a hunt.")
 
     job = read_job(job_id)
     if job is None:
-        return _error(f"Job '{job_id}' not found in {get_jobs_dir()}.")
+        raise ValueError(f"Job '{job_id}' not found in {get_jobs_dir()}.")
 
     status = job.get("status")
     if status == "running":
-        # Check if the PID is still alive
         pid = job.get("pid")
         if pid and is_pid_alive(pid):
-            return _error(
+            raise ValueError(
                 f"Job {job_id} is still running (PID {pid}). "
                 "Wait for the webhook notification, then call load_hunt_results() again."
             )
-        # PID gone but status not updated — monitor may have been lost; try loading results
     elif status == "error":
-        return _error(f"Job {job_id} failed: {job.get('error', 'unknown error')}")
+        raise ValueError(f"Job {job_id} failed: {job.get('error', 'unknown error')}")
 
     rpath = results_path(job_id)
     if not rpath.exists() or rpath.stat().st_size == 0:
-        return _error(f"Results file for job {job_id} is empty or missing: {rpath}")
+        raise ValueError(f"Results file for job {job_id} is empty or missing: {rpath}")
 
     hits = load_job_results(job_id)
     state.hits = hits
@@ -470,7 +318,7 @@ async def _load_hunt_results(args: dict) -> CallToolResult:
         for h in hits if h
     })
 
-    return _ok(
+    return (
         f"Loaded {hit_count} hit(s) from job {job_id}.\n"
         f"  Rules triggered: {rules_triggered}\n"
         f"  Completed: {completed_at}\n\n"
@@ -478,13 +326,60 @@ async def _load_hunt_results(args: dict) -> CallToolResult:
     )
 
 
-async def _chainsaw_hunt(args: dict) -> CallToolResult:
+@mcp.tool()
+async def chainsaw_report() -> str:
+    """Write the full hunt report to disk and return a concise summary with severity
+    breakdown and top detections. Call after load_hunt_results.
+    Use get_detections to drill into specific rules.
+    """
+    if state.hunt_status == "running":
+        raise ValueError("Hunt is still running. Call hunt_status to check progress.")
+
+    if state.hunt_status != "done":
+        raise ValueError("No completed hunt results. Call load_hunt_results first.")
+
+    report_file = write_full_report(
+        state.hits,
+        evtx_path=state.evidence_path,
+        output_dir=get_output_dir(),
+    )
+    state.report_file = str(report_file)
+
+    return format_summary(state.hits, evtx_path=state.evidence_path, report_file=report_file)
+
+
+@mcp.tool()
+async def get_detections(
+    rule: str = "",
+    severity: str = "",
+    limit: int = 25,
+) -> str:
+    """Return individual events from the completed hunt, optionally filtered by rule name
+    (substring match) or severity level. Use this to investigate specific detections
+    after chainsaw_report shows the summary.
+    """
+    if state.hunt_status != "done":
+        raise ValueError("No completed hunt results. Call load_hunt_results first.")
+
+    return _filter_detections(
+        state.hits,
+        rule=rule or None,
+        severity=severity or None,
+        limit=limit,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Legacy inline-hunt helpers (not registered as MCP tools)
+# ---------------------------------------------------------------------------
+
+async def _chainsaw_hunt(args: dict) -> str:
     if not state.evidence:
-        return _error("No evidence staged. Call prepare_evidence first.")
+        raise ValueError("No evidence staged. Call prepare_evidence first.")
 
     if state.hunt_status == "running":
         elapsed = time.time() - (state.hunt_started_at or time.time())
-        return _error(
+        raise ValueError(
             f"A hunt is already running ({_fmt_elapsed(elapsed)}). "
             "Call hunt_status to check progress."
         )
@@ -505,14 +400,11 @@ async def _chainsaw_hunt(args: dict) -> CallToolResult:
     state.hunt_finished_at = None
     state.hunt_error = ""
 
-    # Run Chainsaw in the background so this call returns immediately.
-    # Large evidence sets can take minutes; awaiting here exhausts the
-    # MCP client's tool-call budget via tight hunt_status polling.
     state._hunt_task = asyncio.create_task(
         _run_hunt_background(evtx_dir, rules, sigma, mapping, extra)
     )
 
-    return _ok(
+    return (
         f"Hunt started against {evtx_count} EVTX file(s).\n"
         "Wait 60 seconds, then call hunt_status once to check progress.\n"
         "Do NOT poll hunt_status more than once per 60 seconds — Chainsaw is "
@@ -540,116 +432,6 @@ async def _run_hunt_background(
         state.hunt_status = "error"
     finally:
         state.hunt_finished_at = time.time()
-
-
-async def _hunt_status(_args: dict) -> CallToolResult:
-    import json as _json
-
-    # Check for detached jobs first — these are independent of session state
-    jobs_dir = get_jobs_dir()
-    detached_running = []
-    detached_complete = []
-    if jobs_dir.exists():
-        for jf in jobs_dir.glob("*/job.json"):
-            try:
-                d = _json.loads(jf.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            jstatus = d.get("status")
-            jid = d.get("job_id", "?")
-            if jstatus == "running":
-                started = d.get("started_at", "?")
-                detached_running.append(f"  job {jid} — started {started}")
-            elif jstatus == "complete":
-                detached_complete.append(
-                    f"  job {jid} — {d.get('hit_count', '?')} hits, "
-                    f"completed {d.get('completed_at', '?')}"
-                )
-
-    if detached_running:
-        lines = ["Detached hunt(s) running (started via start_hunt):"]
-        lines += detached_running
-        lines += [
-            "",
-            "These run independently — do NOT keep polling this tool.",
-            "You will be notified via webhook when they finish.",
-            "Then call load_hunt_results() to load the results for analysis.",
-        ]
-        if detached_complete:
-            lines += ["", "Already completed:"] + detached_complete
-        return _ok("\n".join(lines))
-
-    if detached_complete and state.hunt_status == "idle":
-        lines = ["Detached hunt(s) already completed — ready to analyze:"]
-        lines += detached_complete
-        lines += ["", "Call load_hunt_results() to load the results."]
-        return _ok("\n".join(lines))
-
-    # Fall through to inline (legacy chainsaw_hunt) status
-    status = state.hunt_status
-
-    if status == "idle":
-        return _ok(
-            "No hunt is currently running.\n"
-            "Use start_hunt to begin a detached hunt, or chainsaw_hunt for small datasets."
-        )
-
-    if status == "running":
-        deadline = time.time() + 60
-        while state.hunt_status == "running" and time.time() < deadline:
-            await asyncio.sleep(5)
-        status = state.hunt_status
-
-    elapsed = _fmt_elapsed(
-        ((state.hunt_finished_at or time.time()) - (state.hunt_started_at or time.time()))
-    )
-
-    if status == "running":
-        return _ok(
-            f"Hunt still running — {elapsed} elapsed.\n"
-            "Call hunt_status again to keep waiting."
-        )
-
-    if status == "done":
-        summary = _hits_summary(state.hits)
-        file_line = f"\n  Results file: {state.output_file}" if state.output_file else ""
-        return _ok(
-            f"Hunt complete in {elapsed} — {len(state.hits)} hit(s) found.{file_line}\n\n"
-            f"{summary}\n\n"
-            "Call chainsaw_report for a summary with severity breakdown."
-        )
-
-    return _ok(f"Hunt failed after {elapsed}: {state.hunt_error}")
-
-
-async def _chainsaw_report(_args: dict) -> CallToolResult:
-    if state.hunt_status == "running":
-        return _error("Hunt is still running. Call hunt_status to check progress.")
-
-    if state.hunt_status != "done":
-        return _error("No completed hunt results. Call load_hunt_results first.")
-
-    report_file = write_full_report(
-        state.hits,
-        evtx_path=state.evidence_path,
-        output_dir=get_output_dir(),
-    )
-    state.report_file = str(report_file)
-
-    summary = format_summary(state.hits, evtx_path=state.evidence_path, report_file=report_file)
-    return _ok(summary)
-
-
-async def _get_detections(args: dict) -> CallToolResult:
-    if state.hunt_status != "done":
-        return _error("No completed hunt results. Call chainsaw_hunt and wait for it to finish.")
-
-    rule = args.get("rule") or None
-    severity = args.get("severity") or None
-    limit = int(args.get("limit") or 25)
-
-    text = get_detections(state.hits, rule=rule, severity=severity, limit=limit)
-    return _ok(text)
 
 
 # ---------------------------------------------------------------------------
@@ -682,14 +464,6 @@ def _hits_summary(hits: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _ok(text: str) -> CallToolResult:
-    return CallToolResult(content=[TextContent(type="text", text=text)])
-
-
-def _error(text: str) -> CallToolResult:
-    return CallToolResult(content=[TextContent(type="text", text=f"ERROR: {text}")], isError=True)
-
-
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -712,11 +486,7 @@ def main() -> None:
 
 
 def _run_stdio() -> None:
-    async def _run():
-        async with stdio_server() as (read_stream, write_stream):
-            await app.run(read_stream, write_stream, app.create_initialization_options())
-
-    asyncio.run(_run())
+    mcp.run()
 
 
 def _run_http() -> None:
@@ -733,7 +503,7 @@ def _run_http() -> None:
     port = get_http_port()
 
     session_manager = StreamableHTTPSessionManager(
-        app=app,
+        app=mcp._mcp_server,
         event_store=None,
         json_response=False,
     )
@@ -761,11 +531,7 @@ def _run_http() -> None:
     else:
         print("  To change host/port: CHAINSAWMCP_HOST=0.0.0.0 CHAINSAWMCP_PORT=8000 chainsawmcp --transport streamable-http")
 
-    # Windows proactor event loop raises ConnectionResetError when the remote
-    # closes an SSE connection, which is normal OpenWebUI behaviour. The selector
-    # loop handles this cleanly.
     if is_windows():
-        import asyncio
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     uvicorn.run(starlette_app, host=host, port=port)
