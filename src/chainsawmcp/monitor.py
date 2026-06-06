@@ -12,6 +12,7 @@ hunt results. Chainsaw is pointed at <job_dir>/evtx/ and finds all sources
 recursively. No temp dirs or cleanup needed.
 """
 
+import hashlib
 import json
 import os
 import subprocess
@@ -126,11 +127,74 @@ def _post_webhook(url: str, payload: dict) -> None:
             pass
 
 
-def _fail_job(job_id: str, error: str) -> None:
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _chainsaw_version(binary: str) -> str:
+    try:
+        result = subprocess.run(
+            [binary, "--version"], capture_output=True, text=True, timeout=10
+        )
+        return (result.stdout or result.stderr).strip().splitlines()[0]
+    except Exception:
+        return "unknown"
+
+
+def _write_provenance(job_id: str, cmd: list[str], results_file: Path, completed_at: str) -> None:
+    """Write chainsaw_provenance.json to the job directory for chain-of-custody."""
+    provenance = {
+        "command": cmd,
+        "output_file": str(results_file),
+        "output_sha256": _sha256(results_file),
+        "completed_at": completed_at,
+        "chainsaw_version": _chainsaw_version(cmd[0]),
+    }
+    prov_file = results_file.parent / "chainsaw_provenance.json"
+    try:
+        prov_file.write_text(json.dumps(provenance, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _classify_error(stderr: str, returncode: int) -> str:
+    """Map common Chainsaw failure patterns to actionable suggested fixes."""
+    s = stderr.lower()
+    if "mapping" in s and any(p in s for p in ("not found", "missing", "no such file", "required")):
+        return "Mapping file missing — run setup_environment or set CHAINSAW_MAPPING"
+    if "sigma" in s and any(p in s for p in ("not found", "no such file", "failed to read", "no sigma", "0 sigma")):
+        return "Sigma rules not found — run setup_environment or set CHAINSAW_SIGMA"
+    if any(p in s for p in ("command not found", "no such file or directory")) and any(b in s for b in ("chainsaw", cmd_name)):
+        return "Chainsaw binary not found — run setup_environment"
+    if any(p in s for p in ("no evtx", "no .evtx", "0 evtx", "found 0")):
+        return "No EVTX files found at the specified path — verify evidence path"
+    if "rules" in s and any(p in s for p in ("not found", "no such file", "0 rules")):
+        return "Chainsaw rules not found — run setup_environment or set CHAINSAW_RULES"
+    if returncode != 0:
+        return "Chainsaw exited with an error — inspect stderr field for details"
+    return "Hunt failed unexpectedly — check chainsaw_stderr.log in the job directory"
+
+
+cmd_name = "chainsaw"  # module-level fallback for _classify_error
+
+
+def _fail_job(job_id: str, error: str, exit_code: int | None = None, stderr: str = "") -> None:
     completed_at = _now()
+    suggested_fix = _classify_error(stderr, exit_code or -1) if stderr or exit_code else error
     data = _read_job(job_id)
-    data.update({"status": "error", "error": error, "completed_at": completed_at,
-                 "hit_count": 0, "rules_triggered": 0})
+    data.update({
+        "status": "error",
+        "error": error,
+        "exit_code": exit_code,
+        "suggested_fix": suggested_fix,
+        "completed_at": completed_at,
+        "hit_count": 0,
+        "rules_triggered": 0,
+    })
     _write_job(job_id, data)
     webhook_url = os.environ.get("CHAINSAWMCP_WEBHOOK_URL")
     if webhook_url:
@@ -259,10 +323,20 @@ def main() -> None:
         hit_count, rules_triggered = _count_hits(job_id)
         status = "complete"
         error = None
+        exit_code_final = returncode
+        suggested_fix = None
+        _write_provenance(job_id, cmd, results_file, completed_at)
     else:
         hit_count, rules_triggered = 0, 0
         status = "error"
         error = error_detail or "No results produced"
+        exit_code_final = returncode
+        stderr_text = ""
+        try:
+            stderr_text = log_file.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            pass
+        suggested_fix = _classify_error(stderr_text, returncode)
 
     data = _read_job(job_id)
     data.update({
@@ -271,6 +345,8 @@ def main() -> None:
         "rules_triggered": rules_triggered,
         "completed_at": completed_at,
         "error": error,
+        "exit_code": exit_code_final,
+        "suggested_fix": suggested_fix,
     })
     _write_job(job_id, data)
 

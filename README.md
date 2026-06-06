@@ -176,6 +176,38 @@ claude mcp add ChainsawMCP ChainsawMCP \
   -e CHAINSAWMCP_WEBHOOK_URL=https://hooks.slack.com/...
 ```
 
+### Protocol SIFT (SIFT Workstation)
+
+ChainsawMCP is designed as a native [Protocol SIFT](https://www.sans.org/blog/protocol-sift-experimental-research-initiative-ai-assisted-dfir/) tool. On a SIFT Workstation, register it with a single command — no path configuration needed upfront, because `setup_environment` handles installation automatically:
+
+```bash
+claude mcp add ChainsawMCP python -m chainsawmcp.server
+```
+
+Then verify the server is connected:
+
+```
+/mcp
+```
+
+On first use, Claude will call `setup_environment` to install Chainsaw to `/opt/chainsaw/` and Sigma rules to `/opt/sigma/`. After that, `start_hunt` works with no explicit path arguments.
+
+**Progressive Disclosure**: copy `skills/evtx-analysis/SKILL.md` from this repo into your investigation's skill directory. Claude loads it automatically when EVTX artifacts are encountered, preserving token headroom for other SIFT tools until it's needed:
+
+```bash
+mkdir -p ~/case/skills/evtx-analysis
+cp /path/to/ChainsawMCP/skills/evtx-analysis/SKILL.md ~/case/skills/evtx-analysis/
+```
+
+Reference it from your `CLAUDE.md`:
+
+```markdown
+## Available skills
+- skills/evtx-analysis/SKILL.md  — Windows Event Log hunting (load when .evtx or E01 artifacts present)
+```
+
+**autoApprove**: Do not add `setup_environment` to `autoApprove`. It downloads and extracts binaries and must always have explicit analyst approval.
+
 ### OpenWebUI (local LLM)
 
 OpenWebUI's native MCP integration does not inject tool schemas into model API calls (tested v0.9.2). Use **mcpo** as an OpenAPI proxy instead:
@@ -252,6 +284,10 @@ Load results from a completed hunt into the session for analysis. If `job_id` is
 
 Write the full hunt report to disk and return a structured summary including severity breakdown (critical / high / medium / low / info), hit counts by rule, and top detections.
 
+| Argument | Type | Description |
+|---|---|---|
+| `output_format` | string, optional | `text` (default, human-readable) or `json` (machine-readable, for orchestration) |
+
 ---
 
 ### 5. `get_detections`
@@ -262,7 +298,23 @@ Return individual events from the completed hunt, filtered by rule name or sever
 |---|---|---|
 | `rule` | string, optional | Case-insensitive substring match on rule name |
 | `severity` | string, optional | Exact severity level: `critical`, `high`, `medium`, `low`, `info` |
-| `limit` | integer, optional | Max events to return (default: 25) |
+| `limit` | integer, optional | Max events to return in text mode (default: 25) |
+| `output_format` | string, optional | `text` (default) or `json` (paginated, for orchestration) |
+| `page` | integer, optional | Page number when `output_format=json` (default: 1) |
+| `page_size` | integer, optional | Events per page when `output_format=json` (default: 25) |
+
+---
+
+### 6. `setup_environment`
+
+Install Chainsaw and Sigma rules on a SIFT Workstation (or any Linux system). Downloads `chainsaw_all_platforms+rules+examples.zip` from the latest GitHub release to `/opt/chainsaw/` and clones SigmaHQ/sigma to `/opt/sigma/`. If `/opt` is not writable, returns exact `sudo` commands to run manually. After install, paths are saved to `~/.chainsawmcp/config.json` — `start_hunt` picks them up automatically with no explicit path arguments.
+
+> ⚠️ Do not add to `autoApprove` — downloads and extracts a binary.
+
+| Argument | Type | Description |
+|---|---|---|
+| `chainsaw_dir` | string, optional | Override install path (default: `/opt/chainsaw`) |
+| `sigma_dir` | string, optional | Override Sigma rules path (default: `/opt/sigma`) |
 
 ---
 

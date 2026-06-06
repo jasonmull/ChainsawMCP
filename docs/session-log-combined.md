@@ -450,3 +450,113 @@ Tested end-to-end on Linux with five E01 images (165–317 EVTXs each):
 - Branch `claude/compassionate-davinci-ZjqwT` pushed; not yet merged to `main`
 - All five E01 images successfully processed
 - Recommended next: merge to `main`, reinstall on analysis workstation from `main`
+
+---
+
+# Session Log — 2026-06-06 (Protocol SIFT Integration)
+
+**Branch:** `claude/keen-bardeen-e0GOC`  
+**PR:** [#47](https://github.com/jasonmull/ChainsawMCP/pull/47)
+
+---
+
+## Objective
+
+Make ChainsawMCP a native, first-class SIFT tool targeting the Protocol SIFT "Find Evil!" hackathon (deadline June 15 2025). Four official tracks, all touched by this session. Official requirement: MCP servers must handle complex parameters, paginate massive outputs, and return structured parsed JSON — thin wrappers disqualified.
+
+---
+
+## Work Completed
+
+### 1. FastMCP migration (`server.py`)
+
+Migrated from the raw `mcp.server.Server` API to bundled FastMCP (`from mcp.server.fastmcp import FastMCP`). The old pattern required two separate handler functions per tool (`list_tools` + `call_tool` dispatch). FastMCP uses `@mcp.tool()` decorators that collocate description with implementation and auto-generate schemas from type hints.
+
+Key changes:
+- `app = Server(...)` → `mcp = FastMCP("ChainsawMCP")`
+- Errors: `return _error(text)` → `raise ValueError(text)`
+- Returns: `return _ok(text)` → `return text`
+- Import aliases added to avoid name collisions with tool function names
+- HTTP transport kept on Starlette/uvicorn using `mcp._mcp_server` for `StreamableHTTPSessionManager`
+
+No new dependency — bundled FastMCP is included in the `mcp` SDK package already in use.
+
+### 2. Structured paginated JSON output (`report.py`, `server.py`)
+
+Added `output_format: str = "text"` to `chainsaw_report` and `get_detections`. Added `page` and `page_size` parameters to `get_detections`. Default remains `"text"` — existing usage unchanged.
+
+New functions in `report.py`:
+- `format_summary_json()` — severity counts + top-rules for `chainsaw_report`
+- `get_detections_json()` — paginated hits with filters and pagination metadata
+- `_hit_to_dict()` — normalises a raw Chainsaw hit to `{rule, severity, timestamp, event_id, computer, data}`
+
+Pagination applies to `get_detections` (individual events, potentially thousands). `chainsaw_report` returns an aggregated summary that is inherently small — no pagination needed.
+
+### 3. Inference constraint provenance logging (`monitor.py`)
+
+On every successful hunt completion, `monitor.py` now writes `chainsaw_provenance.json` to the job directory containing the exact Chainsaw command, raw output file path, SHA-256 of that file, completion timestamp, and Chainsaw version string. `load_hunt_results` reads and surfaces this record in every response so it travels into Claude's context alongside the findings.
+
+This provides a cryptographic audit trail proving findings came from Chainsaw, not from AI inference — the "Courtroom Track" requirement.
+
+New helpers: `_sha256()` (streaming), `_chainsaw_version()` (runs `--version`), `_write_provenance()`.
+
+### 4. Ralph Wiggum structured error responses (`monitor.py`, `jobs.py`, `server.py`)
+
+Hunt failures now produce a structured JSON error payload returned via `ValueError` from `load_hunt_results`. Payload includes `status`, `job_id`, `error`, `exit_code`, `stderr` (first 2KB), `suggested_fix`, and `attempt` counter.
+
+`_classify_error()` maps stderr patterns to actionable fix strings. The `attempt` counter is initialised by scanning the jobs directory for prior failed jobs against the same evidence path — the Ralph Wiggum loop can enforce a retry cap at `attempt >= 3` without external state.
+
+**Critical ordering fix:** Mapping check in `_classify_error` runs before sigma check because the mapping filename (`sigma-event-logs-all.yml`) contains "sigma" and would otherwise hit the wrong branch.
+
+### 5. `setup_environment` self-bootstrapping tool (`setup.py`, `config.py`, `server.py`)
+
+New `setup.py` module and `setup_environment` MCP tool. Installs Chainsaw (from `chainsaw_all_platforms+rules+examples.zip` — the only GitHub release asset that includes `rules/`) to `/opt/chainsaw/` and Sigma rules (shallow git clone) to `/opt/sigma/`. When `/opt` requires `sudo`, the tool returns exact shell commands instead of escalating privileges silently.
+
+After successful install, paths are written to `~/.chainsawmcp/config.json`. All `get_*_path()` functions in `config.py` now check this file as a fallback between env var and PATH default — no manual path arguments needed after first setup.
+
+### 6. MCP registration + SKILL.md (`skills/evtx-analysis/SKILL.md`, `README.md`)
+
+Created `skills/evtx-analysis/SKILL.md` implementing the Protocol SIFT Progressive Disclosure pattern. The skill is loaded on demand when the investigation involves EVTX files, E01 images, or Windows artifact questions — not on every session start.
+
+SKILL.md documents the four-step workflow, the Ralph Wiggum error handling procedure with `attempt >= 3` escalation, a severity interpretation table, and the completion promise token `<promise>CHAINSAW_HUNT_COMPLETE</promise>` used by the orchestration loop to gate follow-on skill loading.
+
+README updated with Protocol SIFT registration command, SKILL.md setup instructions, and updated tool parameter tables for `chainsaw_report`, `get_detections`, and the new `setup_environment` tool.
+
+---
+
+## Bugs Found and Fixed
+
+### 1. `_classify_error` misrouting mapping errors to sigma branch
+**Symptom:** `"error: Mapping file not found: sigma-event-logs-all.yml"` was returning `suggested_fix: "Verify --sigma path"` instead of `"Verify --mapping path"`.  
+**Root cause:** The filename contains "sigma", so the sigma pattern matched before the mapping pattern.  
+**Fix:** Reordered checks — mapping check runs first.
+
+### 2. `_classify_error` missing "no sigma rules found" pattern
+**Symptom:** `"error: no sigma rules found at /opt/sigma"` was falling through to the unclassified catch-all.  
+**Root cause:** Pattern list checked for `"sigma rules"` but not `"no sigma"`.  
+**Fix:** Added `"no sigma"` to the sigma branch pattern list.
+
+### 3. HTTP transport incompatibility with FastMCP `mcp.run()`
+**Symptom:** HTTP mode lost CORS middleware and Windows event loop policy after FastMCP migration.  
+**Fix:** Keep existing Starlette/uvicorn setup; access underlying MCP server via `mcp._mcp_server` for `StreamableHTTPSessionManager`.
+
+### 4. `needs_sudo` test false-positive in root environment
+**Symptom:** `_can_write` test always returned `True` in CI (running as UID 0), even for chmod 0o500 directories.  
+**Root cause:** `os.access()` bypasses permission bits for root. Expected behavior — production runs as a normal analyst user on SIFT where this works correctly.
+
+---
+
+## Configuration Changes
+
+No new environment variables. New persistent config file: `~/.chainsawmcp/config.json` (written by `setup_environment`). Keys: `chainsaw_bin`, `rules_path`, `mapping_path`, `sigma_path`. All `get_*_path()` functions in `config.py` respect this file.
+
+---
+
+## State at Session End
+
+- Branch `claude/keen-bardeen-e0GOC` pushed; PR #47 open
+- All six Protocol SIFT integration items committed
+- FastMCP migration complete and verified
+- Provenance logging active for all future hunts
+- `setup_environment` tested against writable and non-writable install targets
+- SKILL.md and README updated

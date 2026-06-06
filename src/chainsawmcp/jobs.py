@@ -36,8 +36,27 @@ def create_job(evidence_path: "str | Path") -> str:
         "rules_triggered": None,
         "completed_at": None,
         "error": None,
+        "exit_code": None,
+        "suggested_fix": None,
+        "attempt": _count_prior_failures(str(evidence_path)) + 1,
     })
     return job_id
+
+
+def _count_prior_failures(evidence_path: str) -> int:
+    """Count prior failed jobs for the same evidence path — used to set attempt counter."""
+    jobs_dir = get_jobs_dir()
+    if not jobs_dir.exists():
+        return 0
+    count = 0
+    for jfile in jobs_dir.glob("*/job.json"):
+        try:
+            data = json.loads(jfile.read_text(encoding="utf-8"))
+            if data.get("evidence_path") == evidence_path and data.get("status") == "error":
+                count += 1
+        except Exception:
+            pass
+    return count
 
 
 def update_job(job_id: str, **fields: Any) -> None:
