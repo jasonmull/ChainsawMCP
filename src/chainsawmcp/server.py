@@ -22,6 +22,7 @@ from .jobs import (
 )
 from .report import format_summary, format_summary_json, get_detections_json, write_full_report
 from .report import get_detections as _filter_detections
+from .setup import DEFAULT_CHAINSAW_DIR, DEFAULT_SIGMA_DIR, check_environment, setup_environment as _run_setup
 
 mcp = FastMCP("ChainsawMCP")
 
@@ -433,6 +434,60 @@ async def get_detections(
         severity=severity or None,
         limit=limit,
     )
+
+
+@mcp.tool()
+async def setup_environment(
+    chainsaw_dir: str = "",
+    sigma_dir: str = "",
+) -> str:
+    """Install Chainsaw and Sigma rules on a SIFT Workstation (or any Linux system).
+
+    Neither Chainsaw nor Sigma rules are pre-installed on SIFT — this tool
+    bootstraps the full environment in one call so start_hunt works without
+    any manual path configuration.
+
+    Installs to:
+      /opt/chainsaw/  — Chainsaw binary, rules/, and mappings/
+      /opt/sigma/     — Sigma detection rules (git clone --depth=1)
+
+    If /opt is not writable (requires sudo), returns the exact shell commands
+    to run manually rather than escalating privileges silently. After install,
+    resolved paths are saved to ~/.chainsawmcp/config.json so start_hunt picks
+    them up automatically with no explicit path arguments.
+
+    NOTE: Do NOT add this tool to autoApprove — it downloads and extracts
+    binaries and should always require explicit analyst approval.
+
+    chainsaw_dir: override install path (default /opt/chainsaw)
+    sigma_dir: override Sigma rules path (default /opt/sigma)
+    """
+    import json as _json
+
+    cdir = Path(chainsaw_dir) if chainsaw_dir.strip() else DEFAULT_CHAINSAW_DIR
+    sdir = Path(sigma_dir) if sigma_dir.strip() else DEFAULT_SIGMA_DIR
+
+    result = await asyncio.to_thread(_run_setup, cdir, sdir)
+
+    lines = ["=== ChainsawMCP Environment Setup ===", ""]
+    for component, info in result["results"].items():
+        status = info.get("status", "?")
+        icon = "✓" if status in ("ok", "installed") else ("⚠" if status == "needs_sudo" else "✗")
+        lines.append(f"  {icon} {component}: {status}")
+        lines.append(f"      path  : {info.get('path')}")
+        lines.append(f"      action: {info.get('action')}")
+
+    if result.get("config_saved"):
+        lines += ["", f"Config saved to: {result['config_saved']}",
+                  "start_hunt will now use these paths automatically."]
+
+    if result.get("sudo_instructions"):
+        lines += ["", "Manual steps required (run these in your terminal):"]
+        for block in result["sudo_instructions"]:
+            lines += ["", block]
+
+    lines += ["", f"Ready: {'YES — run start_hunt to begin a hunt' if result['ready'] else 'NO — complete the manual steps above first'}"]
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

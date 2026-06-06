@@ -1,8 +1,30 @@
 """Configuration and environment handling."""
 
+import json
 import os
 import platform
 from pathlib import Path
+
+
+def get_config_path() -> Path:
+    return Path.home() / ".chainsawmcp" / "config.json"
+
+
+def load_saved_config() -> dict:
+    """Load persisted config written by setup_environment."""
+    try:
+        return json.loads(get_config_path().read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_config(updates: dict) -> None:
+    """Merge updates into the persisted config file."""
+    p = get_config_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    existing = load_saved_config()
+    existing.update(updates)
+    p.write_text(json.dumps(existing, indent=2), encoding="utf-8")
 
 
 def get_ollama_base_url() -> str:
@@ -14,28 +36,42 @@ def get_ollama_model() -> str:
 
 
 def get_chainsaw_binary() -> Path:
-    """Return the platform-appropriate Chainsaw binary name."""
-    name = "chainsaw.exe" if platform.system() == "Windows" else "chainsaw"
-    # Allow override via env var; otherwise expect it on PATH
+    """Return the Chainsaw binary path. Precedence: env var → saved config → PATH."""
     override = os.environ.get("CHAINSAW_BIN")
     if override:
         return Path(override)
+    saved = load_saved_config().get("chainsaw_bin")
+    if saved:
+        return Path(saved)
+    name = "chainsaw.exe" if platform.system() == "Windows" else "chainsaw"
     return Path(name)
 
 
 def get_rules_path() -> Path | None:
+    """Precedence: env var → saved config → None."""
     val = os.environ.get("CHAINSAW_RULES")
-    return Path(val) if val else None
+    if val:
+        return Path(val)
+    saved = load_saved_config().get("rules_path")
+    return Path(saved) if saved else None
 
 
 def get_sigma_path() -> Path | None:
+    """Precedence: env var → saved config → None."""
     val = os.environ.get("CHAINSAW_SIGMA")
-    return Path(val) if val else None
+    if val:
+        return Path(val)
+    saved = load_saved_config().get("sigma_path")
+    return Path(saved) if saved else None
 
 
 def get_mapping_path() -> Path | None:
+    """Precedence: env var → saved config → None."""
     val = os.environ.get("CHAINSAW_MAPPING")
-    return Path(val) if val else None
+    if val:
+        return Path(val)
+    saved = load_saved_config().get("mapping_path")
+    return Path(saved) if saved else None
 
 
 def get_hunt_timeout() -> int:
