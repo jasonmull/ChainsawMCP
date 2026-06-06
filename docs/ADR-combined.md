@@ -616,3 +616,213 @@ start_bulk_hunt(paths=["/evidence/host-dc.E01", "/evidence/host-rd.E01", "/evide
 | Folder-watching daemon | Requires a persistent background service; adds operational complexity for IR deployments |
 | Fully automatic LLM report on completion | One-shot, no follow-up questions; breaks local-LLM privacy model |
 | asyncio task with longer polling window | Same fundamental problem — MCP session must remain open |
+
+---
+
+# Protocol SIFT Integration
+
+**Date:** 2026-06-06  
+**Status:** Accepted  
+**Deciders:** Jason Mull  
+**Branch:** `claude/keen-bardeen-e0GOC`  
+**PR:** [#47](https://github.com/jasonmull/ChainsawMCP/pull/47)
+
+---
+
+## Context
+
+Protocol SIFT is the SANS Institute initiative to integrate Claude Code into the SIFT Workstation as an agentic DFIR command center built on MCP. The "Find Evil!" hackathon (deadline June 15 2025) defines four judging tracks:
+
+- Track 1 (25%): Forensics MCP Server Engineering — structured/paginated JSON, complex parameters
+- Track 2 (25%): Context Engineering / Progressive Disclosure — SKILL.md pattern, no monolithic CLAUDE.md
+- Track 3 (20%): Self-Correction Loop — Ralph Wiggum structured errors, retry with fix, iteration cap
+- Track 4 (25%): Inference Constraint / Courtroom Track — cryptographic chain of custody for findings
+- UX/Vibe (15%): Setup experience, first-run ergonomics
+
+The hackathon brief explicitly calls out thin wrappers as disqualifying. MCP servers must handle complex parameters, paginate massive outputs, and return structured parsed JSON that Claude can reason over.
+
+---
+
+## Decision 18: Migrate server to bundled FastMCP
+
+**Problem:** The raw `mcp.server.Server` API requires a `@app.list_tools()` handler returning a schema list and a separate `@app.call_tool()` dispatch function. Tool descriptions live in `list_tools()` while logic lives in `call_tool()`, creating two places to update for every change. The hackathon brief and SIFT setup guide both reference FastMCP by name — judges will expect it.
+
+**Decision:** Migrate `server.py` to use the **bundled FastMCP** (`from mcp.server.fastmcp import FastMCP`) rather than the standalone FastMCP 2.0+ package.
+
+**Rationale:**
+- Single import change — no new dependency, no regression risk to existing logic
+- `@mcp.tool()` decorators collocate description (docstring) with implementation
+- Auto-schema generation from type hints is correct by construction — critical for paginated JSON parameters and `setup_environment`
+- Wire protocol is identical — Claude Code cannot distinguish between server implementations
+- Full standalone FastMCP 2.0 migration (Providers, Transforms, OpenTelemetry) is a future option
+
+**Changes:**
+- `from mcp.server import Server` → `from mcp.server.fastmcp import FastMCP`
+- `app = Server(...)` → `mcp = FastMCP("ChainsawMCP")`
+- `@app.list_tools()` / `@app.call_tool()` dispatch → `@mcp.tool()` on each handler
+- Errors: `return _error(text)` → `raise ValueError(text)`
+- Returns: `return _ok(text)` → `return text`
+- stdio: `_run_stdio()` → `mcp.run()`
+- HTTP transport: keep existing Starlette/uvicorn setup, access underlying server via `mcp._mcp_server` for `StreamableHTTPSessionManager`
+
+**Import conflict resolution:** `prepare_evidence` and `get_detections` are used as both imported functions and tool names. Resolved with import aliases: `from .evidence import prepare_evidence as _stage_evidence` and `from .report import get_detections as _filter_detections`.
+
+---
+
+## Decision 19: Structured paginated JSON output for Protocol SIFT orchestration
+
+**Problem:** ChainsawMCP's output was plain text formatted for human reading. A 500-hit hunt dumps thousands of tokens at once. The hackathon brief explicitly states: *"Do not just pass raw terminal output… paginate massive outputs (to prevent token bloat)."* Without pagination, a large hunt breaks the orchestration loop.
+
+**Decision:** Add `output_format: str = "text"` and pagination parameters (`page`, `page_size`) to `get_detections`. Add `output_format` to `chainsaw_report`. Default to `"text"` to avoid breaking existing usage.
+
+**JSON output shape for `get_detections`:**
+```json
+{
+  "filters": {"rule": "", "severity": ""},
+  "total": 42,
+  "page": 1,
+  "page_size": 25,
+  "total_pages": 2,
+  "hits": [{"rule": "...", "severity": "...", "timestamp": "...", "event_id": "...", "computer": "...", "data": {}}]
+}
+```
+
+**JSON output shape for `chainsaw_report`:**
+```json
+{
+  "generated": "...",
+  "evidence": "...",
+  "report_file": "...",
+  "summary": {"total": 42, "rules_triggered": 5, "critical": 0, "high": 3, "medium": 12, "low": 5, "info": 22},
+  "top_rules": [{"rule": "...", "severity": "...", "count": 3}]
+}
+```
+
+**Pagination applies to `get_detections` only** — `chainsaw_report` returns an aggregated summary (severity counts + top-N rules) that is inherently small.
+
+**New functions in `report.py`:** `format_summary_json()`, `get_detections_json()`, `_hit_to_dict()`.
+
+---
+
+## Decision 20: Inference constraint provenance logging (SHA-256 chain of custody)
+
+**Problem:** The biggest barrier to AI in forensics is the "Courtroom Problem" — a judge cannot accept findings that might have originated from an LLM's imagination rather than from the evidence. The hackathon judging criterion states: *"Your solution must definitively prove the concept of 'High Inference Constraint' — demonstrating to a judge that the evidence came from chainsaw, not from the AI's imagination."*
+
+**Decision:** On hunt completion, write `chainsaw_provenance.json` to the job directory. Surface the provenance record in every `load_hunt_results` response so it travels with the findings into Claude's context.
+
+**Provenance record schema:**
+```json
+{
+  "command": ["chainsaw", "hunt", "..."],
+  "output_file": "/tmp/chainsawmcp_jobs/<job_id>/hunt_results.json",
+  "output_sha256": "abc123...",
+  "completed_at": "2026-06-06T12:00:00Z",
+  "chainsaw_version": "2.16.0"
+}
+```
+
+**Implementation:**
+- `_sha256(path)` — 64KB chunk streaming SHA-256 in `monitor.py`
+- `_chainsaw_version(binary)` — runs `chainsaw --version`, returns first stdout line or `"unknown"`
+- `_write_provenance(job_id, cmd, results_file, completed_at)` — writes the record to `<jobs_dir>/<job_id>/chainsaw_provenance.json`
+- `load_hunt_results` reads provenance from job dir and includes it in the response under `"provenance"`
+
+**Chain of custody guarantee:** The SHA-256 hash is computed over the raw Chainsaw output file before any parsing. Any modification to findings after the hunt is detectable by re-hashing.
+
+---
+
+## Decision 21: Structured error responses for Ralph Wiggum self-correction loop
+
+**Problem:** ChainsawMCP hunt failures surfaced as vague text or were invisible to the MCP client (stderr written to a file only the monitor could read). For Claude to self-correct automatically, errors need to be structured and include the raw stderr in the tool response.
+
+**Decision:** `load_hunt_results` on a failed job raises `ValueError(json.dumps(error_payload))` with a structured error payload including all fields needed for automated retry.
+
+**Error payload schema:**
+```json
+{
+  "status": "error",
+  "job_id": "...",
+  "error": "chainsaw exited with code 1",
+  "exit_code": 1,
+  "stderr": "error: no sigma rules found at /opt/sigma",
+  "suggested_fix": "run setup_environment",
+  "attempt": 1
+}
+```
+
+**`suggested_fix` values and their meanings:**
+- `"run setup_environment"` — Chainsaw binary not found or Sigma rules missing
+- `"Verify --sigma path"` — Sigma rules path exists but rules failed to load
+- `"Verify --mapping path"` — Mapping file not found
+- `"Verify evidence path"` — No EVTX files found at the staged path
+- `"Check Chainsaw rules directory"` — Rules path missing or empty
+- `"Check Chainsaw stderr for details"` — Unclassified error
+
+**Attempt counter:** `jobs.py` initialises each job with `attempt = _count_prior_failures(evidence_path) + 1`. The Ralph Wiggum loop enforces a retry cap at `attempt >= 3` — SKILL.md documents this as the escalation threshold.
+
+**`_classify_error` ordering:** Mapping check runs BEFORE sigma check because the mapping filename (`sigma-event-logs-all.yml`) contains the string "sigma" and would match the sigma branch incorrectly.
+
+---
+
+## Decision 22: `setup_environment` self-bootstrapping tool with no silent privilege escalation
+
+**Problem:** Neither Chainsaw nor Sigma rules are pre-installed on a SIFT Workstation. Analysts must manually configure three separate paths before a hunt can run. The first-run experience is broken before a single tool call. The correct Chainsaw release asset (`chainsaw_all_platforms+rules+examples.zip`) includes `rules/`; the Linux-specific tarball does not.
+
+**Decision:** Add `setup_environment` as an explicit MCP tool that installs all Chainsaw dependencies in one step. When `/opt` is not writable (requires `sudo`), the tool emits exact shell commands for the analyst to run manually rather than escalating privileges silently.
+
+**Install targets:**
+| Component | Source | Path |
+|---|---|---|
+| `chainsaw` binary + rules + mappings | `chainsaw_all_platforms+rules+examples.zip` from GitHub releases | `/opt/chainsaw/` |
+| Sigma rules | `git clone --depth=1 https://github.com/SigmaHQ/sigma` | `/opt/sigma/` |
+
+**Why not auto-sudo:** Silent privilege escalation from within an MCP server process is a liability in an evidentiary context (Track 4). The tool is unprivileged and auditable.
+
+**Why `/opt/sigma/` separate from `/opt/chainsaw/`:** Other SIFT tools reference Sigma rules. A shared, conventional path avoids duplication and prevents version skew between tools.
+
+**Post-install:** Resolved paths are written to `~/.chainsawmcp/config.json`. Subsequent `start_hunt` calls load them automatically — no manual path arguments needed.
+
+**New module `src/chainsawmcp/setup.py`:**
+- `check_environment()` — read-only status check
+- `setup_environment()` — main entry point
+- `_can_write(path)` — walks to nearest existing ancestor before checking `os.access(W_OK)`
+- `_latest_asset_url()` — GitHub releases API to resolve latest asset download URL
+- `_extract_chainsaw(zip_path, dest)` — finds Linux x86_64 binary by name pattern, makes executable, extracts `rules/` and `mappings/`
+
+---
+
+## Decision 23: MCP registration + SKILL.md Progressive Disclosure pattern
+
+**Problem:** ChainsawMCP is invisible to Protocol SIFT orchestration without explicit MCP registration. Stuffing all tool knowledge into a monolithic CLAUDE.md causes "context rot" — the brief identifies this as the primary failure mode for naive integrations. Judges explicitly require Progressive Disclosure.
+
+**Decision:** Ship a `skills/evtx-analysis/SKILL.md` file that Claude loads on demand when EVTX artifacts or Windows investigation keywords are encountered, not on every session start. Add MCP registration instructions to README.
+
+**SKILL.md responsibilities:**
+- When to load (EVTX files, E01 images, Windows authentication/execution/lateral-movement questions)
+- First-run setup with `setup_environment` (with ⚠️ analyst-confirmation warning)
+- Standard four-step workflow: `start_hunt` → `load_hunt_results` → `chainsaw_report` → `get_detections`
+- Completion promise: `<promise>CHAINSAW_HUNT_COMPLETE</promise>` (used by orchestration loop to gate follow-on skill loading)
+- Ralph Wiggum error handling procedure including `attempt >= 3` escalation rule
+- Severity interpretation table
+- Follow-on skill references: memory-analysis, timeline, registry, network
+
+**Registration command:**
+```
+claude mcp add ChainsawMCP python -m chainsawmcp.server
+```
+
+**`autoApprove` note:** `setup_environment` downloads and extracts binaries. README recommends analyst confirmation before adding it to `autoApprove`.
+
+---
+
+## Updated Tool Catalogue
+
+| Tool | Purpose |
+|---|---|
+| `prepare_evidence` | Synchronous E01 staging for inspection (may timeout on large images — prefer `start_hunt`) |
+| `start_hunt` | Begin a detached hunt against one EVTX dir or E01 image; returns immediately |
+| `start_bulk_hunt` | Begin a detached hunt against multiple E01 images; one job, one result set |
+| `load_hunt_results` | Load completed results into session; includes provenance record for chain of custody |
+| `chainsaw_report` | Structured summary with severity breakdown; supports `output_format="json"` |
+| `get_detections` | Drill-down by rule name or severity; supports `output_format="json"` with pagination |
+| `setup_environment` | Install Chainsaw and Sigma rules; write paths to `~/.chainsawmcp/config.json` |
