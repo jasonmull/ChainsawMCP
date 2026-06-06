@@ -20,7 +20,7 @@ from .jobs import (
     results_path,
     update_job,
 )
-from .report import format_summary, write_full_report
+from .report import format_summary, format_summary_json, get_detections_json, write_full_report
 from .report import get_detections as _filter_detections
 
 mcp = FastMCP("ChainsawMCP")
@@ -327,10 +327,13 @@ async def load_hunt_results(job_id: str = "") -> str:
 
 
 @mcp.tool()
-async def chainsaw_report() -> str:
-    """Write the full hunt report to disk and return a concise summary with severity
-    breakdown and top detections. Call after load_hunt_results.
+async def chainsaw_report(output_format: str = "text") -> str:
+    """Write the full hunt report to disk and return a summary with severity breakdown
+    and top detections. Call after load_hunt_results.
     Use get_detections to drill into specific rules.
+
+    output_format: 'text' (default, human-readable) or 'json' (structured, for orchestration).
+    JSON output includes severity breakdown and top rules as a machine-readable object.
     """
     if state.hunt_status == "running":
         raise ValueError("Hunt is still running. Call hunt_status to check progress.")
@@ -345,6 +348,13 @@ async def chainsaw_report() -> str:
     )
     state.report_file = str(report_file)
 
+    if output_format == "json":
+        import json
+        result = format_summary_json(
+            state.hits, evtx_path=state.evidence_path, report_file=report_file
+        )
+        return json.dumps(result, indent=2)
+
     return format_summary(state.hits, evtx_path=state.evidence_path, report_file=report_file)
 
 
@@ -353,13 +363,32 @@ async def get_detections(
     rule: str = "",
     severity: str = "",
     limit: int = 25,
+    output_format: str = "text",
+    page: int = 1,
+    page_size: int = 25,
 ) -> str:
     """Return individual events from the completed hunt, optionally filtered by rule name
     (substring match) or severity level. Use this to investigate specific detections
     after chainsaw_report shows the summary.
+
+    output_format: 'text' (default, human-readable) or 'json' (structured, paginated).
+    When output_format='json', use page/page_size for pagination instead of limit.
+    JSON output is suitable for automated orchestration — each page is a manageable
+    token-bounded batch of hits.
     """
     if state.hunt_status != "done":
         raise ValueError("No completed hunt results. Call load_hunt_results first.")
+
+    if output_format == "json":
+        import json
+        result = get_detections_json(
+            state.hits,
+            rule=rule or None,
+            severity=severity or None,
+            page=page,
+            page_size=page_size,
+        )
+        return json.dumps(result, indent=2)
 
     return _filter_detections(
         state.hits,

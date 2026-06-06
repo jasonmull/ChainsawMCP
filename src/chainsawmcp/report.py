@@ -1,5 +1,6 @@
 """Format Chainsaw hunt results into analyst reports."""
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,100 @@ def format_full_report(hits: list[dict[str, Any]], evtx_path: str) -> str:
 
     lines += ["=" * 72, "END OF REPORT", "=" * 72]
     return "\n".join(lines)
+
+
+def format_summary_json(
+    hits: list[dict[str, Any]],
+    evtx_path: str,
+    report_file: Path | None = None,
+) -> dict[str, Any]:
+    """Return hunt summary as a structured dict for JSON output."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    grouped = _group_by_rule(hits)
+    by_severity = _count_by_severity(hits)
+
+    top_rules = [
+        {
+            "rule": rule,
+            "severity": _extract_severity(rule_hits[0]),
+            "count": len(rule_hits),
+        }
+        for rule, rule_hits in sorted(grouped.items(), key=lambda x: -len(x[1]))[:15]
+    ]
+
+    return {
+        "generated": now,
+        "evidence": evtx_path,
+        "report_file": str(report_file) if report_file else None,
+        "summary": {
+            "total": len(hits),
+            "rules_triggered": len(grouped),
+            **{sev: count for sev, count in by_severity.items()},
+        },
+        "top_rules": top_rules,
+    }
+
+
+def get_detections_json(
+    hits: list[dict[str, Any]],
+    rule: str | None = None,
+    severity: str | None = None,
+    page: int = 1,
+    page_size: int = 25,
+) -> dict[str, Any]:
+    """Return paginated detections as a structured dict for JSON output."""
+    filtered = hits
+
+    if severity:
+        sev_lower = severity.lower()
+        filtered = [h for h in filtered if _extract_severity(h).lower() == sev_lower]
+
+    if rule:
+        rule_lower = rule.lower()
+        filtered = [h for h in filtered if rule_lower in _rule_name(h).lower()]
+
+    total = len(filtered)
+    page = max(1, page)
+    page_size = max(1, page_size)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    start = (page - 1) * page_size
+    page_hits = filtered[start : start + page_size]
+
+    return {
+        "filters": {"rule": rule, "severity": severity},
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "hits": [_hit_to_dict(h) for h in page_hits],
+    }
+
+
+def _hit_to_dict(hit: dict[str, Any]) -> dict[str, Any]:
+    """Convert a raw Chainsaw hit to a clean structured dict."""
+    system = _get_system(hit)
+
+    ts = hit.get("timestamp")
+    if not ts:
+        tc = system.get("TimeCreated", {})
+        ts = (
+            tc.get("SystemTime")
+            or tc.get("@SystemTime")
+            or tc.get("#attributes", {}).get("SystemTime")
+        )
+
+    eid = system.get("EventID", "?")
+    if isinstance(eid, dict):
+        eid = eid.get("#text") or eid.get("@text") or str(eid)
+
+    return {
+        "rule": _rule_name(hit),
+        "severity": _extract_severity(hit),
+        "timestamp": ts,
+        "event_id": str(eid) if eid else None,
+        "computer": system.get("Computer"),
+        "data": _get_event_data(hit),
+    }
 
 
 def get_detections(
