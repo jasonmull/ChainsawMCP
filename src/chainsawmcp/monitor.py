@@ -12,6 +12,7 @@ hunt results. Chainsaw is pointed at <job_dir>/evtx/ and finds all sources
 recursively. No temp dirs or cleanup needed.
 """
 
+import hashlib
 import json
 import os
 import subprocess
@@ -124,6 +125,40 @@ def _post_webhook(url: str, payload: dict) -> None:
             )
         except OSError:
             pass
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _chainsaw_version(binary: str) -> str:
+    try:
+        result = subprocess.run(
+            [binary, "--version"], capture_output=True, text=True, timeout=10
+        )
+        return (result.stdout or result.stderr).strip().splitlines()[0]
+    except Exception:
+        return "unknown"
+
+
+def _write_provenance(job_id: str, cmd: list[str], results_file: Path, completed_at: str) -> None:
+    """Write chainsaw_provenance.json to the job directory for chain-of-custody."""
+    provenance = {
+        "command": cmd,
+        "output_file": str(results_file),
+        "output_sha256": _sha256(results_file),
+        "completed_at": completed_at,
+        "chainsaw_version": _chainsaw_version(cmd[0]),
+    }
+    prov_file = results_file.parent / "chainsaw_provenance.json"
+    try:
+        prov_file.write_text(json.dumps(provenance, indent=2), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _fail_job(job_id: str, error: str) -> None:
@@ -259,6 +294,7 @@ def main() -> None:
         hit_count, rules_triggered = _count_hits(job_id)
         status = "complete"
         error = None
+        _write_provenance(job_id, cmd, results_file, completed_at)
     else:
         hit_count, rules_triggered = 0, 0
         status = "error"

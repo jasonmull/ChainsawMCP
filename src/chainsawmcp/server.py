@@ -318,10 +318,30 @@ async def load_hunt_results(job_id: str = "") -> str:
         for h in hits if h
     })
 
+    # Include provenance record so it travels with findings into Claude's context.
+    # This is the chain-of-custody anchor: proof that hits came from Chainsaw,
+    # not from AI inference.
+    provenance_lines = ""
+    prov_path = rpath.parent / "chainsaw_provenance.json"
+    if prov_path.exists():
+        try:
+            import json as _json
+            prov = _json.loads(prov_path.read_text(encoding="utf-8"))
+            provenance_lines = (
+                "\nProvenance (chain of custody):\n"
+                f"  Command  : {' '.join(prov.get('command', []))}\n"
+                f"  Output   : {prov.get('output_file')}\n"
+                f"  SHA-256  : {prov.get('output_sha256')}\n"
+                f"  Chainsaw : {prov.get('chainsaw_version')}\n"
+            )
+        except Exception:
+            pass
+
     return (
         f"Loaded {hit_count} hit(s) from job {job_id}.\n"
         f"  Rules triggered: {rules_triggered}\n"
-        f"  Completed: {completed_at}\n\n"
+        f"  Completed: {completed_at}\n"
+        f"{provenance_lines}\n"
         "Call chainsaw_report for a structured summary, or get_detections to drill into specific rules."
     )
 
