@@ -808,7 +808,7 @@ The hackathon brief explicitly calls out thin wrappers as disqualifying. MCP ser
 
 **Registration command:**
 ```
-claude mcp add ChainsawMCP python -m chainsawmcp.server
+claude mcp add ChainsawMCP -- python -m chainsawmcp.server
 ```
 
 **`autoApprove` note:** `setup_environment` downloads and extracts binaries. README recommends analyst confirmation before adding it to `autoApprove`.

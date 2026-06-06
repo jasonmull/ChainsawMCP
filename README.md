@@ -181,7 +181,7 @@ claude mcp add ChainsawMCP ChainsawMCP \
 ChainsawMCP is designed as a native [Protocol SIFT](https://www.sans.org/blog/protocol-sift-experimental-research-initiative-ai-assisted-dfir/) tool. On a SIFT Workstation, register it with a single command — no path configuration needed upfront, because `setup_environment` handles installation automatically:
 
 ```bash
-claude mcp add ChainsawMCP python -m chainsawmcp.server
+claude mcp add ChainsawMCP -- python -m chainsawmcp.server
 ```
 
 Then verify the server is connected:
