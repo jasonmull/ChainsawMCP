@@ -23,7 +23,7 @@ def check_environment(
     sigma_dir: Path = DEFAULT_SIGMA_DIR,
 ) -> dict:
     """Return the current installation status without making any changes."""
-    binary = chainsaw_dir / "bin" / "chainsaw"
+    binary = chainsaw_dir / "chainsaw"
     rules = chainsaw_dir / "rules"
     mapping = chainsaw_dir / "mappings" / "sigma-event-logs-all.yml"
     return {
@@ -103,7 +103,7 @@ def _cargo_available() -> bool:
 
 
 def _build_and_install_chainsaw(chainsaw_dir: Path) -> None:
-    """Clone the Chainsaw repo, compile with cargo, copy rules and mappings."""
+    """Clone the Chainsaw repo, compile with cargo build --release, copy binary and data files."""
     with tempfile.TemporaryDirectory(prefix="chainsaw_src_") as tmp:
         src = Path(tmp)
 
@@ -114,15 +114,21 @@ def _build_and_install_chainsaw(chainsaw_dir: Path) -> None:
             timeout=300,
         )
 
-        # cargo install builds in release mode by default.
-        # --root sets the output prefix; binary lands at <root>/bin/chainsaw.
-        chainsaw_dir.mkdir(parents=True, exist_ok=True)
         subprocess.run(
-            ["cargo", "install", "--path", str(src), "--root", str(chainsaw_dir)],
+            ["cargo", "build", "--release"],
+            cwd=str(src),
             check=True,
             capture_output=True,
             timeout=1800,
         )
+
+        chainsaw_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy compiled binary.
+        built_binary = src / "target" / "release" / "chainsaw"
+        dest_binary = chainsaw_dir / "chainsaw"
+        shutil.copy2(str(built_binary), str(dest_binary))
+        dest_binary.chmod(dest_binary.stat().st_mode | 0o111)
 
         # Copy rules/ and mappings/ from the source tree alongside the binary.
         for subdir in ("rules", "mappings"):
@@ -140,7 +146,7 @@ def _setup_chainsaw(
     sudo_instructions: list,
     config_paths: dict,
 ) -> None:
-    binary = chainsaw_dir / "bin" / "chainsaw"
+    binary = chainsaw_dir / "chainsaw"
     rules_dir = chainsaw_dir / "rules"
     mapping_file = chainsaw_dir / "mappings" / "sigma-event-logs-all.yml"
     all_present = (
@@ -156,9 +162,11 @@ def _setup_chainsaw(
     elif not _can_write(chainsaw_dir):
         sudo_instructions.append(
             f"# Install Chainsaw to {chainsaw_dir} (requires write access)\n"
-            f"sudo mkdir -p {chainsaw_dir}/bin\n"
             f"git clone --depth=1 {CHAINSAW_REPO_URL} /tmp/chainsaw_src\n"
-            f"cargo install --path /tmp/chainsaw_src --root {chainsaw_dir}\n"
+            f"cd /tmp/chainsaw_src && cargo build --release\n"
+            f"sudo mkdir -p {chainsaw_dir}\n"
+            f"sudo cp /tmp/chainsaw_src/target/release/chainsaw {chainsaw_dir}/chainsaw\n"
+            f"sudo chmod +x {chainsaw_dir}/chainsaw\n"
             f"sudo cp -r /tmp/chainsaw_src/rules {chainsaw_dir}/\n"
             f"sudo cp -r /tmp/chainsaw_src/mappings {chainsaw_dir}/\n"
             f"rm -rf /tmp/chainsaw_src"

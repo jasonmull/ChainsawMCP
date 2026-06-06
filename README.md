@@ -312,7 +312,7 @@ Return individual events from the completed hunt, filtered by rule name or sever
 
 ### 6. `setup_environment`
 
-Build Chainsaw from source via `cargo install` and clone Sigma rules. Installs to `~/.local/share/chainsaw/` and `~/.local/share/sigma/` by default — no sudo required. The binary lands at `<chainsaw_dir>/bin/chainsaw`; rules and mappings are copied alongside it from the source tree. Paths are saved to `~/.chainsawmcp/config.json` so `start_hunt` picks them up automatically.
+Build Chainsaw from source (`cargo build --release`) and clone Sigma rules. Installs to `~/.local/share/chainsaw/` and `~/.local/share/sigma/` by default — no sudo required. The compiled binary is copied to `<chainsaw_dir>/chainsaw`; rules and mappings are copied alongside it from the source tree. Paths are saved to `~/.chainsawmcp/config.json` so `start_hunt` picks them up automatically.
 
 **Requires**: `cargo` in PATH. If missing, the tool returns the Rust install command rather than failing silently.
 
