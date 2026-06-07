@@ -766,28 +766,32 @@ The hackathon brief explicitly calls out thin wrappers as disqualifying. MCP ser
 
 ## Decision 22: `setup_environment` self-bootstrapping tool with no silent privilege escalation
 
-**Problem:** Neither Chainsaw nor Sigma rules are pre-installed on a SIFT Workstation. Analysts must manually configure three separate paths before a hunt can run. The first-run experience is broken before a single tool call. The correct Chainsaw release asset (`chainsaw_all_platforms+rules+examples.zip`) includes `rules/`; the Linux-specific tarball does not.
+**Problem:** Neither Chainsaw nor Sigma rules are pre-installed on a SIFT Workstation. Analysts must manually configure three separate paths before a hunt can run. The first-run experience is broken before a single tool call.
 
-**Decision:** Add `setup_environment` as an explicit MCP tool that installs all Chainsaw dependencies in one step. When `/opt` is not writable (requires `sudo`), the tool emits exact shell commands for the analyst to run manually rather than escalating privileges silently.
+**Decision:** Add `setup_environment` as an explicit MCP tool that builds and installs all Chainsaw dependencies in one step. Default install targets are XDG user-writable paths — no sudo required on a standard Linux system. When a target directory is not writable, the tool emits exact shell commands for the analyst to run manually rather than escalating privileges silently.
 
-**Install targets:**
+**Install targets (defaults):**
 | Component | Source | Path |
 |---|---|---|
-| `chainsaw` binary + rules + mappings | `chainsaw_all_platforms+rules+examples.zip` from GitHub releases | `/opt/chainsaw/` |
-| Sigma rules | `git clone --depth=1 https://github.com/SigmaHQ/sigma` | `/opt/sigma/` |
+| `chainsaw` binary + rules + mappings | `cargo build --release` from cloned source | `~/.local/share/chainsaw/` |
+| Sigma rules | `git clone --depth=1 https://github.com/SigmaHQ/sigma` | `~/.local/share/sigma/` |
+
+**Build method:** `git clone --depth=1 https://github.com/WithSecureLabs/chainsaw` to a temp dir → `cargo build --release` → copy `target/release/chainsaw` to `<chainsaw_dir>/chainsaw` → copy `rules/` and `mappings/` from source tree → clean up temp dir. Requires `cargo` in PATH; if absent, the tool returns the rustup install command rather than failing with a subprocess error.
+
+**Why `~/.local/share/` not `/opt/`:** XDG Base Directory spec — standard for user application data on Linux, no sudo required, survives OS upgrades. `/opt` is still supported via the `chainsaw_dir` / `sigma_dir` arguments; the tool emits sudo instructions when write access is lacking.
+
+**Why `~/.local/share/sigma/` separate from `~/.local/share/chainsaw/`:** Other SIFT tools reference Sigma rules. A shared, conventional path avoids duplication and prevents version skew between tools.
 
 **Why not auto-sudo:** Silent privilege escalation from within an MCP server process is a liability in an evidentiary context (Track 4). The tool is unprivileged and auditable.
-
-**Why `/opt/sigma/` separate from `/opt/chainsaw/`:** Other SIFT tools reference Sigma rules. A shared, conventional path avoids duplication and prevents version skew between tools.
 
 **Post-install:** Resolved paths are written to `~/.chainsawmcp/config.json`. Subsequent `start_hunt` calls load them automatically — no manual path arguments needed.
 
 **New module `src/chainsawmcp/setup.py`:**
-- `check_environment()` — read-only status check
+- `check_environment()` — read-only status check; binary expected at `<chainsaw_dir>/chainsaw`
 - `setup_environment()` — main entry point
 - `_can_write(path)` — walks to nearest existing ancestor before checking `os.access(W_OK)`
-- `_latest_asset_url()` — GitHub releases API to resolve latest asset download URL
-- `_extract_chainsaw(zip_path, dest)` — finds Linux x86_64 binary by name pattern, makes executable, extracts `rules/` and `mappings/`
+- `_cargo_available()` — checks `shutil.which("cargo")`
+- `_build_and_install_chainsaw(chainsaw_dir)` — clone → `cargo build --release` → copy binary + data files
 
 ---
 
@@ -811,7 +815,7 @@ The hackathon brief explicitly calls out thin wrappers as disqualifying. MCP ser
 claude mcp add ChainsawMCP -- python -m chainsawmcp.server
 ```
 
-**`autoApprove` note:** `setup_environment` downloads and extracts binaries. README recommends analyst confirmation before adding it to `autoApprove`.
+**`autoApprove` note:** `setup_environment` clones and compiles Chainsaw — takes several minutes. README recommends analyst confirmation before adding it to `autoApprove`.
 
 ---
 
