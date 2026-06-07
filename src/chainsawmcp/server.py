@@ -356,10 +356,21 @@ async def load_hunt_results(job_id: str = "") -> str:
         except Exception:
             pass
 
+    staging_errors = job.get("staging_errors") or []
+    staging_warn = ""
+    if staging_errors:
+        skipped = "\n".join(f"  ⚠  {e}" for e in staging_errors)
+        staging_warn = (
+            f"\n⚠  WARNING — {len(staging_errors)} source(s) failed to stage and were SKIPPED:\n"
+            f"{skipped}\n"
+            "Results below reflect only the sources that staged successfully.\n"
+        )
+
     return (
         f"Loaded {hit_count} hit(s) from job {job_id}.\n"
         f"  Rules triggered: {rules_triggered}\n"
         f"  Completed: {completed_at}\n"
+        f"{staging_warn}"
         f"{provenance_lines}\n"
         "Call chainsaw_report for a structured summary, or get_detections to drill into specific rules."
     )
