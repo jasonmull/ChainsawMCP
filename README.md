@@ -181,7 +181,7 @@ claude mcp add ChainsawMCP ChainsawMCP \
 ChainsawMCP is designed as a native [Protocol SIFT](https://www.sans.org/blog/protocol-sift-experimental-research-initiative-ai-assisted-dfir/) tool. On a SIFT Workstation, register it with a single command — no path configuration needed upfront, because `setup_environment` handles installation automatically:
 
 ```bash
-claude mcp add ChainsawMCP python -m chainsawmcp.server
+claude mcp add ChainsawMCP -- python -m chainsawmcp.server
 ```
 
 Then verify the server is connected:
@@ -190,7 +190,12 @@ Then verify the server is connected:
 /mcp
 ```
 
-On first use, Claude will call `setup_environment` to install Chainsaw to `/opt/chainsaw/` and Sigma rules to `/opt/sigma/`. After that, `start_hunt` works with no explicit path arguments.
+On first use, Claude will call `setup_environment` to build Chainsaw from source and clone Sigma rules into `~/.local/share/` — no sudo required. After that, `start_hunt` works with no explicit path arguments.
+
+**Prerequisite**: Rust toolchain (`cargo`) must be installed. If it isn't, `setup_environment` returns the install command. Install Rust first:
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
 
 **Progressive Disclosure**: copy `skills/evtx-analysis/SKILL.md` from this repo into your investigation's skill directory. Claude loads it automatically when EVTX artifacts are encountered, preserving token headroom for other SIFT tools until it's needed:
 
@@ -206,7 +211,7 @@ Reference it from your `CLAUDE.md`:
 - skills/evtx-analysis/SKILL.md  — Windows Event Log hunting (load when .evtx or E01 artifacts present)
 ```
 
-**autoApprove**: Do not add `setup_environment` to `autoApprove`. It downloads and extracts binaries and must always have explicit analyst approval.
+**autoApprove**: Do not add `setup_environment` to `autoApprove`. It clones and compiles Chainsaw (takes several minutes) and must always have explicit analyst approval.
 
 ### OpenWebUI (local LLM)
 
@@ -307,14 +312,16 @@ Return individual events from the completed hunt, filtered by rule name or sever
 
 ### 6. `setup_environment`
 
-Install Chainsaw and Sigma rules on a SIFT Workstation (or any Linux system). Downloads `chainsaw_all_platforms+rules+examples.zip` from the latest GitHub release to `/opt/chainsaw/` and clones SigmaHQ/sigma to `/opt/sigma/`. If `/opt` is not writable, returns exact `sudo` commands to run manually. After install, paths are saved to `~/.chainsawmcp/config.json` — `start_hunt` picks them up automatically with no explicit path arguments.
+Build Chainsaw from source (`cargo build --release`) and clone Sigma rules. Installs to `~/.local/share/chainsaw/` and `~/.local/share/sigma/` by default — no sudo required. The compiled binary is copied to `<chainsaw_dir>/chainsaw`; rules and mappings are copied alongside it from the source tree. Paths are saved to `~/.chainsawmcp/config.json` so `start_hunt` picks them up automatically.
 
-> ⚠️ Do not add to `autoApprove` — downloads and extracts a binary.
+**Requires**: `cargo` in PATH. If missing, the tool returns the Rust install command rather than failing silently.
+
+> ⚠️ Do not add to `autoApprove` — clones and compiles Chainsaw, takes several minutes.
 
 | Argument | Type | Description |
 |---|---|---|
-| `chainsaw_dir` | string, optional | Override install path (default: `/opt/chainsaw`) |
-| `sigma_dir` | string, optional | Override Sigma rules path (default: `/opt/sigma`) |
+| `chainsaw_dir` | string, optional | Override install path (default: `~/.local/share/chainsaw`) |
+| `sigma_dir` | string, optional | Override Sigma rules path (default: `~/.local/share/sigma`) |
 
 ---
 

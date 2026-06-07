@@ -20,9 +20,14 @@ Before hunting for the first time on a SIFT Workstation, confirm the environment
 call: setup_environment()
 ```
 
-This installs Chainsaw to `/opt/chainsaw/` and Sigma rules to `/opt/sigma/` and saves the paths permanently. If `/opt` is not writable, it returns exact `sudo` commands to run manually. After setup, no path arguments are needed for `start_hunt`.
+This builds Chainsaw from source via `cargo install` and clones Sigma rules, installing both to `~/.local/share/` (no sudo required). Saves paths to `~/.chainsawmcp/config.json` — after setup, no path arguments are needed for `start_hunt`.
 
-> ⚠️ `setup_environment` downloads and extracts binaries. Always confirm with the analyst before calling it.
+**Prerequisite:** Rust must be installed (`cargo` in PATH). If it isn't, `setup_environment` will return the install command:
+```
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+> ⚠️ `setup_environment` clones and compiles Chainsaw — this takes several minutes. Always confirm with the analyst before calling it.
 
 ---
 

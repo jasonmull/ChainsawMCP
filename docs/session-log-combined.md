@@ -510,7 +510,7 @@ Hunt failures now produce a structured JSON error payload returned via `ValueErr
 
 ### 5. `setup_environment` self-bootstrapping tool (`setup.py`, `config.py`, `server.py`)
 
-New `setup.py` module and `setup_environment` MCP tool. Installs Chainsaw (from `chainsaw_all_platforms+rules+examples.zip` — the only GitHub release asset that includes `rules/`) to `/opt/chainsaw/` and Sigma rules (shallow git clone) to `/opt/sigma/`. When `/opt` requires `sudo`, the tool returns exact shell commands instead of escalating privileges silently.
+New `setup.py` module and `setup_environment` MCP tool. Builds Chainsaw from source (`git clone --depth=1` → `cargo build --release` → copy `target/release/chainsaw` + `rules/` + `mappings/`) and clones Sigma rules — both to XDG user-writable paths (`~/.local/share/chainsaw/` and `~/.local/share/sigma/`) by default, requiring no sudo. When a target directory is not writable, the tool returns exact shell commands instead of escalating privileges silently. Includes a `cargo` availability check that returns the rustup install command if Rust is not present.
 
 After successful install, paths are written to `~/.chainsawmcp/config.json`. All `get_*_path()` functions in `config.py` now check this file as a fallback between env var and PATH default — no manual path arguments needed after first setup.
 
@@ -560,3 +560,16 @@ No new environment variables. New persistent config file: `~/.chainsawmcp/config
 - Provenance logging active for all future hunts
 - `setup_environment` tested against writable and non-writable install targets
 - SKILL.md and README updated
+
+---
+
+## Post-session corrections (2026-06-07)
+
+### `claude mcp add` syntax fix
+`claude mcp add ChainsawMCP python -m chainsawmcp.server` failed with `error: unknown option '-m'` because the CLI parsed `-m` as its own flag. Fixed by inserting `--` separator: `claude mcp add ChainsawMCP -- python -m chainsawmcp.server`. Updated in README and ADR-combined.md.
+
+### `setup_environment` build method: cargo build --release
+Initial implementation used `cargo install --path <src> --root <dest>` which places the binary at `<dest>/bin/chainsaw`. Corrected to `cargo build --release` (Chainsaw's documented build method), which outputs to `<src>/target/release/chainsaw` — copied manually to `<chainsaw_dir>/chainsaw` (flat layout, no `bin/` subdirectory). Note: `cargo install` has no `--release` flag; it builds in release mode by default. `cargo build --release` is the correct invocation.
+
+### Default install paths confirmed as XDG user paths
+Both Chainsaw and Sigma default to `~/.local/share/` — `~/.local/share/chainsaw/` and `~/.local/share/sigma/` respectively. No sudo required on a standard Linux/SIFT install.
