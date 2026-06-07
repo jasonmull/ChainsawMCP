@@ -4,7 +4,7 @@
 
 ChainsawMCP is a [Model Context Protocol](https://modelcontextprotocol.io/) server that bridges [Chainsaw](https://github.com/WithSecureLabs/chainsaw) — WithSecure's fast Windows Event Log threat hunting tool — with AI assistants. It is built for incident responders who need to analyse large volumes of Windows event logs quickly, without an EDR or SIEM in place.
 
-Because the server makes no LLM calls of its own, it works equally well with **cloud models** (Claude Desktop) and **locally hosted models** (OpenWebUI + Ollama, LM Studio, or any MCP-compatible client) — keeping sensitive evidence off the internet if your engagement requires it.
+Because the server makes no LLM calls of its own, it works equally well with **cloud models** (Claude Desktop) and **locally hosted models** (OpenWebUI + Ollama, or any MCP-compatible client) — keeping sensitive evidence off the internet if your engagement requires it.
 
 ---
 
@@ -12,22 +12,27 @@ Because the server makes no LLM calls of its own, it works equally well with **c
 
 ```
   Analyst prompt:
-  "Run a hunt on F:\ChainsawEvals"
+  "Run a hunt on /evidence/dc-cdrive.E01"
           │
           ▼
   ┌───────────────────┐
-  │   start_hunt      │  ← spawns Chainsaw as detached process
-  │   (returns in     │    no MCP session kept alive
-  │    < 1 second)    │    --skip-errors on by default
+  │   start_hunt      │  ← returns in < 1 second
+  │   (job ID issued) │    spawns monitor as independent process
+  └───────────────────┘
+          │
+          ▼
+  ┌───────────────────┐
+  │  Monitor process  │  ← fully detached; survives session close
+  │  stages EVTXs     │    writes status to job.json throughout
+  │  runs Chainsaw    │    optional: POSTs webhook on completion
   └───────────────────┘
           │
           │  [Chainsaw runs independently — minutes to hours]
           │
           ▼
   ┌───────────────────┐
-  │  Webhook fires    │  ← Discord, Slack, or any HTTP endpoint
-  │  "Hunt complete   │    7,098 hits · 74 rules · job f2ef9e2d
-  │   — 7098 hits"    │
+  │  job.json updated │  ← status: "complete", hit_count, provenance
+  │  (webhook fires)  │    Discord / Slack / any HTTP endpoint
   └───────────────────┘
           │
   Analyst returns:
@@ -46,21 +51,21 @@ Because the server makes no LLM calls of its own, it works equally well with **c
   └───────────────────┘
 ```
 
-The MCP server handles evidence preparation and Chainsaw execution. The AI client — Claude Desktop, OpenWebUI, LM Studio, or anything MCP-compatible — provides all the reasoning. The server makes no LLM calls.
+The MCP server handles evidence preparation and Chainsaw execution. The AI client — Claude Desktop, OpenWebUI, or anything MCP-compatible — provides all the reasoning. The server makes no LLM calls.
 
 ---
 
 ## Key Design Decisions
 
-### Detached Execution — No More Timeouts
+### Background Monitor — No More Timeouts
 
-The original approach embedded Chainsaw execution inside an MCP tool call. MCP clients have finite tool budgets, and a 30-minute Chainsaw run against 3+ GB of logs exceeded them. Every attempt to wait inline hit a timeout.
+The original approach ran Chainsaw inline inside an MCP tool call. MCP clients have finite tool budgets, and a 30-minute Chainsaw run against 3+ GB of logs exceeded them reliably.
 
-The fix: `start_hunt` spawns Chainsaw (via a Python runner process) using `CREATE_NEW_PROCESS_GROUP` on Windows and `start_new_session` on Linux. The process is fully independent — it survives MCP session close, client disconnect, and long idle periods. Job state is written to disk so results persist across sessions.
+The fix: `start_hunt` spawns `chainsawmcp.monitor` as a fully independent Python process (`start_new_session` on Linux). The monitor handles all evidence preparation and Chainsaw execution, writing status updates to `job.json` throughout. The process survives MCP session close, client disconnect, and long idle periods. Results persist on disk across sessions.
 
-### Webhook Notification
+### Webhook Notifications (Optional)
 
-A completion monitor runs alongside Chainsaw. When the hunt finishes, it updates the job record on disk and POSTs a notification to your configured webhook. Discord, Slack, and generic HTTP endpoints are all supported out of the box.
+When the monitor finishes, it optionally POSTs a notification to your configured webhook. Discord, Slack, and generic HTTP endpoints are all supported. If no webhook is configured, you can simply call `load_hunt_results()` at any point — it reads `job.json` and returns immediately if the hunt is still running.
 
 ### Interactive Analysis, Not One-Shot Reports
 
@@ -70,16 +75,16 @@ Automatic report generation was considered and rejected. A one-shot report canno
 
 ## Features
 
-- **Detached hunt execution** — Chainsaw runs as an independent process; `start_hunt` returns in under one second regardless of image size
-- **Bulk hunt support** — `start_bulk_hunt` accepts a list of E01 images and processes them in a single Chainsaw run under one job ID
+- **Background monitor execution** — `start_hunt` returns in under one second; a detached monitor process handles all staging and Chainsaw execution
+- **Bulk hunt support** — `start_bulk_hunt` accepts multiple E01 images or EVTX directories and processes them in a single Chainsaw run under one job ID
 - **Stable staging paths** — EVTXs are extracted to `<case_dir>/analysis/<job_id>/evtx/<source_name>/`; no temp dirs that can disappear
-- **Webhook notifications** — Discord, Slack, and generic HTTP receivers supported
 - **Persistent job state** — results survive session restarts; load any previous job by ID or automatically pick up the latest
-- **E01 disk image support** — forensic images mounted and EVTXs extracted automatically on both Windows and Linux
+- **E01 disk image support** — forensic images mounted and EVTXs extracted automatically via `pytsk3` (no FUSE/root required); falls back to Sleuth Kit CLI if pytsk3 is unavailable
 - **Split E01 handling** — pass the first segment (`.E01`); multi-segment images resolved automatically
-- **Cross-platform** — full support for Windows and Linux; binary names, mount tools, and process management all handled
-- **Fault-tolerant hunting** — `--skip-errors` is always enabled; a single corrupt log file does not abort the entire hunt
-- **Local LLM support** — works with OpenWebUI, LM Studio, Ollama, and any MCP-compatible client; sensitive evidence never has to leave your network
+- **Fault-tolerant hunting** — `--skip-errors` is always enabled; a single corrupt log file does not abort the hunt
+- **Webhook notifications** — optional; Discord, Slack, and generic HTTP receivers supported; not required when polling via `load_hunt_results()`
+- **Chain-of-custody provenance** — every hunt writes `chainsaw_provenance.json` with the exact command, Chainsaw version, and SHA-256 of results
+- **Local LLM support** _(in development)_ — designed to work with OpenWebUI, Ollama, and any MCP-compatible client; sensitive evidence never has to leave your network
 - **No server-side LLM calls** — the server is purely operational; all reasoning is provided by the client
 
 ---
@@ -91,21 +96,17 @@ Automatic report generation was considered and rejected. A one-shot report canno
 | Requirement | Notes |
 |---|---|
 | Python 3.11+ | |
-| [Chainsaw](https://github.com/WithSecureLabs/chainsaw/releases) | On `PATH` or set `CHAINSAW_BIN` |
+| [Chainsaw](https://github.com/WithSecureLabs/chainsaw/releases) | On `PATH` or set `CHAINSAW_BIN`; or run `setup_environment` to install automatically |
 
-### E01 Mounting — Linux
+### E01 Mounting
 
-E01 images are extracted using `pytsk3` (The Sleuth Kit Python bindings) — **no root access, no FUSE mounts required.** pytsk3 is included in the package dependencies.
+E01 images are extracted using `pytsk3` (The Sleuth Kit Python bindings) — **no root access, no FUSE mounts required.** `pytsk3` is included in the package dependencies.
 
-If pytsk3 is unavailable, the server falls back to the Sleuth Kit CLI tools:
+If `pytsk3` is unavailable, the server falls back to the Sleuth Kit CLI tools:
 
 ```bash
 sudo apt install sleuthkit
 ```
-
-### E01 Mounting — Windows
-
-[Arsenal Image Mounter CLI](https://arsenalrecon.com/products/arsenal-image-mounter) must be on `PATH` or set via `AIM_CLI`.
 
 ---
 
@@ -121,74 +122,37 @@ pip install -e .
 
 ## Configuration
 
-All settings are environment variables, set in your MCP client config.
+All settings are environment variables, set in your MCP client config or shell environment.
 
 | Variable | Default | Description |
 |---|---|---|
-| `CHAINSAW_BIN` | `chainsaw` / `chainsaw.exe` | Path to Chainsaw binary |
+| `CHAINSAW_BIN` | `chainsaw` | Path to Chainsaw binary |
 | `CHAINSAW_RULES` | _(none)_ | Path to Chainsaw rules directory |
 | `CHAINSAW_SIGMA` | _(none)_ | Path to Sigma detections directory |
 | `CHAINSAW_MAPPING` | _(none)_ | Sigma mapping file — required when using Sigma rules |
-| `CHAINSAWMCP_CASE_DIR` | current working directory | Case root — all generated artifacts are written under `analysis/`, `exports/`, and `reports/` subdirectories here |
+| `CHAINSAWMCP_CASE_DIR` | current working directory | Case root — all generated artifacts land under `analysis/`, `exports/`, and `reports/` here |
 | `CHAINSAWMCP_JOBS_DIR` | `<case_dir>/analysis` | Override job state and results location (advanced) |
 | `CHAINSAW_OUTPUT_DIR` | `<case_dir>/reports` | Override hunt report output location (advanced) |
-| `CHAINSAWMCP_WEBHOOK_URL` | _(none)_ | Webhook URL to POST on hunt completion |
-| `AIM_CLI` | `aim_cli.exe` | Windows only: path to Arsenal Image Mounter CLI |
+| `CHAINSAWMCP_WEBHOOK_URL` | _(none)_ | Optional: webhook URL to POST on hunt completion |
 
-> **Protocol SIFT:** On a SIFT Workstation, case directories live at `/cases/[CASE_ID]/`. Launch Claude Code from within your case directory and `CHAINSAWMCP_CASE_DIR` resolves automatically — no explicit configuration needed.
+> **Auto-discovery:** If `CHAINSAW_BIN`, `CHAINSAW_RULES`, `CHAINSAW_SIGMA`, and `CHAINSAW_MAPPING` are not set, `start_hunt` checks `~/.chainsawmcp/config.json` (written by `setup_environment`) and falls back gracefully — you only need to set these explicitly if you have a non-standard install.
 
 > **Sigma mapping:** Chainsaw requires a mapping file to match Sigma field names to Windows Event Log fields. Chainsaw ships these in its `mappings/` directory — `sigma-event-logs-all.yml` is the standard choice.
 
 ---
 
-## MCP Client Setup
+## Setup
 
-ChainsawMCP works with any MCP-compatible client. Use **Claude Desktop** for cloud-based analysis or **OpenWebUI / LM Studio** to keep evidence entirely on your local network.
+### Default Setup (SIFT Workstation or any Linux system)
 
-### Claude Desktop
-
-Add to `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "ChainsawMCP": {
-      "command": "ChainsawMCP",
-      "env": {
-        "CHAINSAW_BIN": "C:\\Tools\\chainsaw\\chainsaw.exe",
-        "CHAINSAW_RULES": "C:\\Tools\\chainsaw\\rules",
-        "CHAINSAW_SIGMA": "C:\\Tools\\chainsaw\\sigma\\rules",
-        "CHAINSAW_MAPPING": "C:\\Tools\\chainsaw\\mappings\\sigma-event-logs-all.yml",
-        "CHAINSAWMCP_CASE_DIR": "C:\\Cases\\EngagementName",
-        "CHAINSAWMCP_WEBHOOK_URL": "https://discord.com/api/webhooks/..."
-      }
-    }
-  }
-}
-```
-
-### Claude Code CLI
-
-```bash
-claude mcp add ChainsawMCP ChainsawMCP \
-  -e CHAINSAW_BIN=/opt/chainsaw/target/release/chainsaw \
-  -e CHAINSAW_RULES=/opt/chainsaw/rules \
-  -e CHAINSAW_SIGMA=/opt/sigma/sigma/rules \
-  -e CHAINSAW_MAPPING=/opt/chainsaw/mappings/sigma-event-logs-all.yml \
-  -e CHAINSAWMCP_CASE_DIR=/cases/current-engagement \
-  -e CHAINSAWMCP_WEBHOOK_URL=https://hooks.slack.com/...
-```
-
-### Protocol SIFT (SIFT Workstation)
-
-ChainsawMCP is designed as a native [Protocol SIFT](https://www.sans.org/blog/protocol-sift-experimental-research-initiative-ai-assisted-dfir/) tool. On a SIFT Workstation, navigate into your case directory first — this anchors all generated artifacts automatically:
+Navigate into your case directory first — this anchors all generated artifacts automatically:
 
 ```bash
 cd /cases/ACME-2026-001
 claude mcp add ChainsawMCP -- python -m chainsawmcp.server
 ```
 
-Then verify the server is connected:
+Verify the server is connected:
 
 ```
 /mcp
@@ -203,12 +167,7 @@ Because `CHAINSAWMCP_CASE_DIR` defaults to the current working directory, launch
 └── reports/            ← hunt_report.txt
 ```
 
-On first use, Claude will call `setup_environment` to build Chainsaw from source and clone Sigma rules into `~/.local/share/` — no sudo required. After that, `start_hunt` works with no explicit path arguments.
-
-**Prerequisite**: Rust toolchain (`cargo`) must be installed. If it isn't, `setup_environment` returns the install command. Install Rust first:
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
+On first use, ask Claude to run `setup_environment` to install Chainsaw and Sigma rules into `/opt/chainsaw/` and `/opt/sigma/` — no explicit path configuration needed afterward. Paths are saved to `~/.chainsawmcp/config.json` and picked up automatically.
 
 **Progressive Disclosure**: copy `skills/evtx-analysis/SKILL.md` from this repo into your case's skill directory. Claude loads it automatically when EVTX artifacts are encountered, preserving token headroom for other SIFT tools until it's needed:
 
@@ -224,29 +183,43 @@ Reference it from your case `CLAUDE.md`:
 - skills/evtx-analysis/SKILL.md  — Windows Event Log hunting (load when .evtx or E01 artifacts present)
 ```
 
-**autoApprove**: Do not add `setup_environment` to `autoApprove`. It clones and compiles Chainsaw (takes several minutes) and must always have explicit analyst approval.
+**autoApprove**: Do not add `setup_environment` to `autoApprove`. It downloads and extracts Chainsaw (takes a minute or two) and must always have explicit analyst approval.
 
-### OpenWebUI (local LLM)
+### Advanced Setup (explicit path configuration)
 
-OpenWebUI's native MCP integration does not inject tool schemas into model API calls (tested v0.9.2). Use **mcpo** as an OpenAPI proxy instead:
+If Chainsaw is already installed at a custom path, or you need to override any default:
 
 ```bash
-pip install mcpo
-
-CHAINSAW_BIN=/usr/local/bin/chainsaw \
-CHAINSAW_RULES=/opt/chainsaw/rules \
-CHAINSAWMCP_CASE_DIR=/cases/current-engagement \
-CHAINSAWMCP_WEBHOOK_URL=https://discord.com/api/webhooks/... \
-mcpo --port 8081 -- ChainsawMCP
+cd /cases/ACME-2026-001
+claude mcp add ChainsawMCP -- python -m chainsawmcp.server \
+  -e CHAINSAW_BIN=/custom/path/chainsaw \
+  -e CHAINSAW_RULES=/custom/rules \
+  -e CHAINSAW_SIGMA=/custom/sigma/rules \
+  -e CHAINSAW_MAPPING=/custom/mappings/sigma-event-logs-all.yml
 ```
 
-Then add `http://localhost:8081` as an **OpenAPI** server in OpenWebUI under **Admin → External Tools → OpenAPI**. Pair with any locally hosted model with tool-calling support — Qwen2.5, Llama 3.1, or Mistral. Evidence never leaves your network.
+Add `CHAINSAWMCP_WEBHOOK_URL` if you want completion notifications:
 
-For models without tool-calling support (e.g. Foundation-Sec-8B-Reasoning), use the OpenWebUI inlet filter in `extras/chainsaw_filter.py` — it runs the full workflow autonomously and passes the results to the model for analysis.
+```bash
+  -e CHAINSAWMCP_WEBHOOK_URL=https://discord.com/api/webhooks/...
+```
+
+### OpenWebUI / Local LLM Integration _(in development)_
+
+ChainsawMCP supports a `--transport streamable-http` mode for OpenWebUI integration, keeping all evidence on your local network:
+
+```bash
+CHAINSAWMCP_CASE_DIR=/cases/current-engagement \
+chainsawmcp --transport streamable-http
+```
+
+Then add `http://localhost:8000/mcp` as an MCP server in OpenWebUI under **Admin → External Tools → Add Server**.
+
+> **Note:** OpenWebUI MCP integration and local LLM tool-calling support are actively evolving. Results may vary depending on model and OpenWebUI version.
 
 ---
 
-## Tools
+## MCP Tools
 
 Tools are listed in execution order for a standard workflow.
 
@@ -254,9 +227,7 @@ Tools are listed in execution order for a standard workflow.
 
 ### 1. `start_hunt`
 
-Start a Chainsaw hunt against an EVTX directory or E01 image. Returns in under one second — all evidence preparation and Chainsaw execution happen inside a fully detached background process with no connection to the MCP session.
-
-For E01 images, extraction is performed by the background process, so even a 5-minute extraction will not timeout the tool call.
+Start a Chainsaw hunt against an EVTX directory or E01 image. Returns in under one second — all evidence preparation and Chainsaw execution happen inside a fully independent background monitor process with no connection to the MCP session.
 
 | Argument | Type | Description |
 |---|---|---|
@@ -266,7 +237,7 @@ For E01 images, extraction is performed by the background process, so even a 5-m
 | `mapping_path` | string, optional | Override `CHAINSAW_MAPPING` |
 | `extra_args` | array, optional | Extra flags passed verbatim to `chainsaw hunt` |
 
-Returns a job ID immediately. EVTXs are staged to `<case_dir>/analysis/<job_id>/evtx/<source_name>/`. A webhook POST fires when the hunt completes. `--skip-errors` is always enabled.
+Returns a job ID immediately. EVTXs are staged to `<case_dir>/analysis/<job_id>/evtx/<source_name>/`. If `CHAINSAWMCP_WEBHOOK_URL` is configured, a webhook POST fires when the hunt completes. `--skip-errors` is always enabled.
 
 ---
 
@@ -290,7 +261,9 @@ Each source is staged to its own subdirectory: `<job_dir>/evtx/<source_stem>/`. 
 
 ### 3. `load_hunt_results`
 
-Load results from a completed hunt into the session for analysis. If `job_id` is omitted, the most recently completed hunt is loaded automatically. Call this after receiving the webhook notification.
+Load results from a completed hunt into the session for analysis. If `job_id` is omitted, the most recently completed hunt is loaded automatically.
+
+You can call this at any time — it reads `job.json` and returns immediately if the hunt is still running. No webhook required.
 
 | Argument | Type | Description |
 |---|---|---|
@@ -325,22 +298,20 @@ Return individual events from the completed hunt, filtered by rule name or sever
 
 ### 6. `setup_environment`
 
-Build Chainsaw from source (`cargo build --release`) and clone Sigma rules. Installs to `~/.local/share/chainsaw/` and `~/.local/share/sigma/` by default — no sudo required. The compiled binary is copied to `<chainsaw_dir>/chainsaw`; rules and mappings are copied alongside it from the source tree. Paths are saved to `~/.chainsawmcp/config.json` so `start_hunt` picks them up automatically.
+Install Chainsaw and Sigma rules. Installs to `/opt/chainsaw/` and `/opt/sigma/` by default — no sudo required if those paths are writable. If they are not, the tool returns the exact shell commands to run manually rather than escalating privileges silently. Resolved paths are saved to `~/.chainsawmcp/config.json` so `start_hunt` picks them up automatically with no explicit path arguments.
 
-**Requires**: `cargo` in PATH. If missing, the tool returns the Rust install command rather than failing silently.
-
-> ⚠️ Do not add to `autoApprove` — clones and compiles Chainsaw, takes several minutes.
+> ⚠️ Do not add to `autoApprove` — downloads and extracts Chainsaw, takes a minute or two.
 
 | Argument | Type | Description |
 |---|---|---|
-| `chainsaw_dir` | string, optional | Override install path (default: `~/.local/share/chainsaw`) |
-| `sigma_dir` | string, optional | Override Sigma rules path (default: `~/.local/share/sigma`) |
+| `chainsaw_dir` | string, optional | Override install path (default: `/opt/chainsaw`) |
+| `sigma_dir` | string, optional | Override Sigma rules path (default: `/opt/sigma`) |
 
 ---
 
 ### `prepare_evidence` _(optional, diagnostic use)_
 
-Synchronously mount a forensic E01 image and stage its EVTXs to a temp directory for inspection. **Not needed for normal hunts** — `start_hunt` and `start_bulk_hunt` handle E01 preparation internally without blocking.
+Synchronously mount a forensic E01 image and stage its EVTXs for inspection. **Not needed for normal hunts** — `start_hunt` and `start_bulk_hunt` handle E01 preparation inside the background monitor without blocking.
 
 > ⚠️ Large E01 images (3–5 GB) take 3–5 minutes to extract and may hit MCP client timeouts. Use `start_hunt` directly for all production workflows.
 
@@ -359,8 +330,7 @@ Analyst:  "Run a hunt on the DC image"
 
 Claude:   [calls start_hunt("/evidence/base-dc-cdrive.E01")]
           Hunt started (job ID: 47962594). EVTXs staging to:
-          /ChainsawJobs/47962594/evtx — Chainsaw will follow.
-          You'll receive a webhook notification when it's done.
+          /cases/ACME-2026-001/analysis/47962594/evtx — Chainsaw will follow.
 
           [Monitor extracts 317 EVTXs, Chainsaw runs — ~10 minutes total]
 
@@ -428,12 +398,13 @@ ChainsawMCP/
 ├── src/
 │   └── chainsawmcp/
 │       ├── server.py       # MCP server, tool dispatch, session state
-│       ├── evidence.py     # E01 mounting (ewfmount / Arsenal) and EVTX staging
-│       ├── chainsaw.py     # Chainsaw subprocess wrapper; detached process spawning
-│       ├── monitor.py      # Detached completion monitor; webhook notification
+│       ├── evidence.py     # E01 extraction (pytsk3 / Sleuth Kit) and EVTX staging
+│       ├── chainsaw.py     # Chainsaw subprocess wrapper; monitor process spawning
+│       ├── monitor.py      # Background hunt runner; job state updates; webhook dispatch
 │       ├── jobs.py         # Disk-persisted job state management
 │       ├── report.py       # Report formatter and severity summary
-│       └── config.py       # Environment variable configuration
+│       ├── setup.py        # setup_environment: Chainsaw + Sigma install
+│       └── config.py       # Environment variable + config.json resolution
 └── tests/
     └── test_chainsaw.py    # Full test suite; no Chainsaw binary required
 ```
@@ -443,23 +414,25 @@ ChainsawMCP/
 ```
 start_hunt("host.E01")  /  start_bulk_hunt(["host1.E01", "host2.E01"])
     │
-    ├─ create_job()          writes job.json { status: "running", pid: ... }
+    ├─ create_job()          writes job.json { status: "running" }
     │
     ├─ spawn monitor         python -m chainsawmcp.monitor <job_id> <config_json>
-    │       │
+    │       │                (independent process — survives session close)
     │       ├─ status → "preparing"
-    │       ├─ stage_evtx(source) → <case_dir>/analysis/<job_id>/evtx/<source_stem>/   (one per source)
+    │       ├─ stage_evtx(source) → <case_dir>/analysis/<job_id>/evtx/<source_stem>/
     │       ├─ status → "running"
     │       ├─ chainsaw hunt <job_dir>/evtx/ --json --skip-errors
-    │       ├─ updates job.json { status: "complete", hit_count: ..., completed_at: ... }
-    │       └─ POSTs webhook
+    │       ├─ writes hunt_results.json + chainsaw_provenance.json
+    │       ├─ status → "complete" (or "error")
+    │       └─ POSTs webhook (if CHAINSAWMCP_WEBHOOK_URL is set)
     │
     └─ returns job ID immediately  (< 1 second)
 
-load_hunt_results()
+load_hunt_results()            ← call any time; works with or without webhook
     │
-    ├─ reads job.json         finds latest completed job if no job_id given
+    ├─ reads job.json           finds latest completed job if no job_id given
     ├─ parses hunt_results.json
+    ├─ surfaces chainsaw_provenance.json into session context
     └─ populates session state → chainsaw_report / get_detections ready
 ```
 
