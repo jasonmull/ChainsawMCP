@@ -205,22 +205,20 @@ def _fail_job(job_id: str, error: str, exit_code: int | None = None, stderr: str
         })
 
 
-def _stage_source(source_path: str, dest: Path, job_id: str) -> bool:
-    """Stage one evidence source into dest. Returns True on success."""
-    from chainsawmcp.evidence import EvidenceError, stage_evtx
+def _stage_source(source_path: str, dest: Path, job_id: str) -> "tuple[bool, str]":
+    """Stage one evidence source into dest. Returns (success, error_message)."""
+    from chainsawmcp.evidence import stage_evtx
 
     try:
         stage_evtx(Path(source_path), dest)
     except Exception as e:
-        _fail_job(job_id, f"Staging failed for {source_path}: {e}")
-        return False
+        return False, f"Staging failed for {source_path}: {e}"
 
     evtx_count = len(list(dest.rglob("*.evtx")))
     if evtx_count == 0:
-        _fail_job(job_id, f"No .evtx files found after staging {source_path} → {dest}")
-        return False
+        return False, f"No .evtx files found after staging {source_path} → {dest}"
 
-    return True
+    return True, ""
 
 
 def _build_chainsaw_cmd(evtx_root: Path, config: dict) -> "list[str] | None":
@@ -276,14 +274,34 @@ def main() -> None:
         data["evtx_path"] = str(evtx_root)
         _write_job(job_id, data)
 
+        staging_errors: list[str] = []
+        staging_log = jdir / "staging_errors.log"
+
         for ep in evidence_paths:
             stem = Path(ep).stem
             dest = evtx_root / stem
             dest.mkdir(parents=True, exist_ok=True)
-            if not _stage_source(ep, dest, job_id):
-                return  # _stage_source already failed the job
+            ok, err = _stage_source(ep, dest, job_id)
+            if not ok:
+                staging_errors.append(err)
+                print(f"[ChainsawMCP] STAGING ERROR (continuing): {err}", file=sys.stderr, flush=True)
+                try:
+                    with staging_log.open("a", encoding="utf-8") as slh:
+                        slh.write(f"[{_now()}] {err}\n")
+                except OSError:
+                    pass
+
+        if staging_errors:
+            # Persist errors into job.json so load_hunt_results can surface them
+            data = _read_job(job_id)
+            data["staging_errors"] = staging_errors
+            _write_job(job_id, data)
 
         total_evtx = len(list(evtx_root.rglob("*.evtx")))
+        if total_evtx == 0:
+            all_errs = "\n".join(staging_errors) or "No .evtx files staged from any source"
+            _fail_job(job_id, f"All sources failed to stage — no EVTXs available:\n{all_errs}")
+            return
 
         data = _read_job(job_id)
         data["status"] = "running"
