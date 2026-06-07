@@ -26,8 +26,9 @@ def _job_dir(job_id: str) -> Path:
     jobs_dir = os.environ.get("CHAINSAWMCP_JOBS_DIR")
     if jobs_dir:
         return Path(jobs_dir) / job_id
-    import tempfile
-    return Path(tempfile.gettempdir()) / "chainsawmcp_jobs" / job_id
+    case_dir = os.environ.get("CHAINSAWMCP_CASE_DIR")
+    base = Path(case_dir) if case_dir else Path.cwd()
+    return base / "analysis" / job_id
 
 
 def _job_file(job_id: str) -> Path:
