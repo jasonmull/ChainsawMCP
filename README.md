@@ -72,7 +72,6 @@ Automatic report generation was considered and rejected. A one-shot report canno
 
 - **Detached hunt execution** — Chainsaw runs as an independent process; `start_hunt` returns in under one second regardless of image size
 - **Bulk hunt support** — `start_bulk_hunt` accepts a list of E01 images and processes them in a single Chainsaw run under one job ID
-- **No E01 timeouts** — extraction happens inside the detached monitor, not in the MCP tool call; even a 5+ minute extraction cannot timeout the client
 - **Stable staging paths** — EVTXs are extracted to `<case_dir>/analysis/<job_id>/evtx/<source_name>/`; no temp dirs that can disappear
 - **Webhook notifications** — Discord, Slack, and generic HTTP receivers supported
 - **Persistent job state** — results survive session restarts; load any previous job by ID or automatically pick up the latest
