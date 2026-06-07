@@ -168,3 +168,37 @@ took approximately 3 minutes on the test system. Documenting a rough
 benchmark (files → expected minutes) would help set timeout defaults and
 alert the developer when something is actually hung vs. just slow.
 -->
+
+---
+
+## Protocol SIFT Compliance
+
+**Evidence Mode: Strict read-only**
+Never write to `/cases/`, `/mnt/`, `/media/`, or any `evidence/` directory.
+Original evidence must remain immutable for chain-of-custody and legal defensibility.
+
+**Case Directory**
+Protocol SIFT places case roots at `/cases/[CASE_ID]/`. Launch Claude Code from within that
+directory — `CHAINSAWMCP_CASE_DIR` defaults to `cwd`, so no explicit env var is needed in the
+standard workflow. All generated artifacts are written to subdirectories relative to this root.
+
+**Artifact Routing (relative to `CHAINSAWMCP_CASE_DIR`)**
+- `./analysis/`  — job state, raw Chainsaw output, EVTX staging, chainsaw_provenance.json, forensic_audit.log
+- `./exports/`   — structured exports: CSVs, extracted registry keys, super-timelines
+- `./reports/`   — final hunt reports (`hunt_report.txt`) and forensic summaries
+
+**UTC Standardization**
+All timestamps in generated reports and audit logs MUST use UTC (ISO 8601, e.g. `2026-06-07T14:30:00Z`).
+Never use local time. Chainsaw provenance records and report headers already enforce this.
+
+**Deterministic Execution**
+Use only the Chainsaw binary (invoked as a subprocess) for detection logic. Do not substitute
+internal probabilistic reasoning for Chainsaw output. The server makes no LLM calls — the MCP
+client provides all reasoning.
+
+**Chain-of-Custody**
+Every hunt writes `chainsaw_provenance.json` alongside `hunt_results.json` in `./analysis/<job_id>/`.
+This record includes the exact command, Chainsaw version, and SHA-256 of the output file.
+`load_hunt_results` surfaces this provenance into the session so it travels with findings.
+A Stop hook appends a timestamped entry to `./analysis/forensic_audit.log` at the end of each
+Claude session — see `.claude/settings.json`.

@@ -8,7 +8,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from .chainsaw import ChainsawError, HuntResult, run_hunt_async, spawn_detached_config, spawn_detached_from_evidence, spawn_hunt_detached
-from .config import get_http_host, get_http_port, get_jobs_dir, get_output_dir, is_windows
+from .config import get_case_dir, get_http_host, get_http_port, get_jobs_dir, get_output_dir, is_windows
 from .evidence import EvidenceError, PreparedEvidence
 from .evidence import prepare_evidence as _stage_evidence
 from .jobs import (
@@ -153,7 +153,7 @@ async def start_hunt(
         update_job(job_id, pid=runner_pid)
         evtx_count = None
 
-    from .config import get_webhook_url
+    from .config import get_case_dir as _get_case_dir, get_webhook_url
     webhook_note = (
         "A webhook POST will be sent to your configured URL when the hunt finishes."
         if get_webhook_url()
@@ -169,6 +169,7 @@ async def start_hunt(
         f"{staging_line}"
         f"  Runner PID: {runner_pid}\n"
         f"  Results will be written to: {jdir / 'hunt_results.json'}\n"
+        f"  Case directory: {_get_case_dir()}\n"
         f"  {webhook_note}\n\n"
         "IMPORTANT: Chainsaw is now running as a fully independent background process.\n"
         "Do NOT call hunt_status or load_hunt_results yet — the hunt is not done.\n"
@@ -385,15 +386,18 @@ async def chainsaw_report(output_format: str = "text") -> str:
         output_dir=get_output_dir(),
     )
     state.report_file = str(report_file)
+    case_dir = get_case_dir()
 
     if output_format == "json":
         import json
         result = format_summary_json(
             state.hits, evtx_path=state.evidence_path, report_file=report_file
         )
+        result["case_dir"] = str(case_dir)
         return json.dumps(result, indent=2)
 
-    return format_summary(state.hits, evtx_path=state.evidence_path, report_file=report_file)
+    summary = format_summary(state.hits, evtx_path=state.evidence_path, report_file=report_file)
+    return summary + f"\nCase directory: {case_dir}"
 
 
 @mcp.tool()

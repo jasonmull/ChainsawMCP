@@ -73,7 +73,7 @@ Automatic report generation was considered and rejected. A one-shot report canno
 - **Detached hunt execution** — Chainsaw runs as an independent process; `start_hunt` returns in under one second regardless of image size
 - **Bulk hunt support** — `start_bulk_hunt` accepts a list of E01 images and processes them in a single Chainsaw run under one job ID
 - **No E01 timeouts** — extraction happens inside the detached monitor, not in the MCP tool call; even a 5+ minute extraction cannot timeout the client
-- **Stable staging paths** — EVTXs are extracted to `<CHAINSAWMCP_JOBS_DIR>/<job_id>/evtx/<source_name>/`; no temp dirs that can disappear
+- **Stable staging paths** — EVTXs are extracted to `<case_dir>/analysis/<job_id>/evtx/<source_name>/`; no temp dirs that can disappear
 - **Webhook notifications** — Discord, Slack, and generic HTTP receivers supported
 - **Persistent job state** — results survive session restarts; load any previous job by ID or automatically pick up the latest
 - **E01 disk image support** — forensic images mounted and EVTXs extracted automatically on both Windows and Linux
@@ -130,9 +130,13 @@ All settings are environment variables, set in your MCP client config.
 | `CHAINSAW_RULES` | _(none)_ | Path to Chainsaw rules directory |
 | `CHAINSAW_SIGMA` | _(none)_ | Path to Sigma detections directory |
 | `CHAINSAW_MAPPING` | _(none)_ | Sigma mapping file — required when using Sigma rules |
-| `CHAINSAWMCP_JOBS_DIR` | system temp / `chainsawmcp_jobs` | Where job state and results are stored |
+| `CHAINSAWMCP_CASE_DIR` | current working directory | Case root — all generated artifacts are written under `analysis/`, `exports/`, and `reports/` subdirectories here |
+| `CHAINSAWMCP_JOBS_DIR` | `<case_dir>/analysis` | Override job state and results location (advanced) |
+| `CHAINSAW_OUTPUT_DIR` | `<case_dir>/reports` | Override hunt report output location (advanced) |
 | `CHAINSAWMCP_WEBHOOK_URL` | _(none)_ | Webhook URL to POST on hunt completion |
 | `AIM_CLI` | `aim_cli.exe` | Windows only: path to Arsenal Image Mounter CLI |
+
+> **Protocol SIFT:** On a SIFT Workstation, case directories live at `/cases/[CASE_ID]/`. Launch Claude Code from within your case directory and `CHAINSAWMCP_CASE_DIR` resolves automatically — no explicit configuration needed.
 
 > **Sigma mapping:** Chainsaw requires a mapping file to match Sigma field names to Windows Event Log fields. Chainsaw ships these in its `mappings/` directory — `sigma-event-logs-all.yml` is the standard choice.
 
@@ -156,7 +160,7 @@ Add to `claude_desktop_config.json`:
         "CHAINSAW_RULES": "C:\\Tools\\chainsaw\\rules",
         "CHAINSAW_SIGMA": "C:\\Tools\\chainsaw\\sigma\\rules",
         "CHAINSAW_MAPPING": "C:\\Tools\\chainsaw\\mappings\\sigma-event-logs-all.yml",
-        "CHAINSAWMCP_JOBS_DIR": "C:\\ChainsawJobs",
+        "CHAINSAWMCP_CASE_DIR": "C:\\Cases\\EngagementName",
         "CHAINSAWMCP_WEBHOOK_URL": "https://discord.com/api/webhooks/..."
       }
     }
@@ -172,15 +176,16 @@ claude mcp add ChainsawMCP ChainsawMCP \
   -e CHAINSAW_RULES=/opt/chainsaw/rules \
   -e CHAINSAW_SIGMA=/opt/sigma/sigma/rules \
   -e CHAINSAW_MAPPING=/opt/chainsaw/mappings/sigma-event-logs-all.yml \
-  -e CHAINSAWMCP_JOBS_DIR=/home/sansforensics/chainsawjobs \
+  -e CHAINSAWMCP_CASE_DIR=/cases/current-engagement \
   -e CHAINSAWMCP_WEBHOOK_URL=https://hooks.slack.com/...
 ```
 
 ### Protocol SIFT (SIFT Workstation)
 
-ChainsawMCP is designed as a native [Protocol SIFT](https://www.sans.org/blog/protocol-sift-experimental-research-initiative-ai-assisted-dfir/) tool. On a SIFT Workstation, register it with a single command — no path configuration needed upfront, because `setup_environment` handles installation automatically:
+ChainsawMCP is designed as a native [Protocol SIFT](https://www.sans.org/blog/protocol-sift-experimental-research-initiative-ai-assisted-dfir/) tool. On a SIFT Workstation, navigate into your case directory first — this anchors all generated artifacts automatically:
 
 ```bash
+cd /cases/ACME-2026-001
 claude mcp add ChainsawMCP -- python -m chainsawmcp.server
 ```
 
@@ -190,6 +195,15 @@ Then verify the server is connected:
 /mcp
 ```
 
+Because `CHAINSAWMCP_CASE_DIR` defaults to the current working directory, launching from within `/cases/[CASE_ID]/` means all artifacts land in the correct Protocol SIFT subdirectories with no additional configuration:
+
+```
+/cases/ACME-2026-001/
+├── analysis/           ← job state, raw Chainsaw output, EVTX staging, forensic_audit.log
+├── exports/            ← structured exports (future)
+└── reports/            ← hunt_report.txt
+```
+
 On first use, Claude will call `setup_environment` to build Chainsaw from source and clone Sigma rules into `~/.local/share/` — no sudo required. After that, `start_hunt` works with no explicit path arguments.
 
 **Prerequisite**: Rust toolchain (`cargo`) must be installed. If it isn't, `setup_environment` returns the install command. Install Rust first:
@@ -197,14 +211,14 @@ On first use, Claude will call `setup_environment` to build Chainsaw from source
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-**Progressive Disclosure**: copy `skills/evtx-analysis/SKILL.md` from this repo into your investigation's skill directory. Claude loads it automatically when EVTX artifacts are encountered, preserving token headroom for other SIFT tools until it's needed:
+**Progressive Disclosure**: copy `skills/evtx-analysis/SKILL.md` from this repo into your case's skill directory. Claude loads it automatically when EVTX artifacts are encountered, preserving token headroom for other SIFT tools until it's needed:
 
 ```bash
-mkdir -p ~/case/skills/evtx-analysis
-cp /path/to/ChainsawMCP/skills/evtx-analysis/SKILL.md ~/case/skills/evtx-analysis/
+mkdir -p /cases/ACME-2026-001/skills/evtx-analysis
+cp /path/to/ChainsawMCP/skills/evtx-analysis/SKILL.md /cases/ACME-2026-001/skills/evtx-analysis/
 ```
 
-Reference it from your `CLAUDE.md`:
+Reference it from your case `CLAUDE.md`:
 
 ```markdown
 ## Available skills
@@ -222,7 +236,7 @@ pip install mcpo
 
 CHAINSAW_BIN=/usr/local/bin/chainsaw \
 CHAINSAW_RULES=/opt/chainsaw/rules \
-CHAINSAWMCP_JOBS_DIR=/opt/chainsawjobs \
+CHAINSAWMCP_CASE_DIR=/cases/current-engagement \
 CHAINSAWMCP_WEBHOOK_URL=https://discord.com/api/webhooks/... \
 mcpo --port 8081 -- ChainsawMCP
 ```
@@ -253,7 +267,7 @@ For E01 images, extraction is performed by the background process, so even a 5-m
 | `mapping_path` | string, optional | Override `CHAINSAW_MAPPING` |
 | `extra_args` | array, optional | Extra flags passed verbatim to `chainsaw hunt` |
 
-Returns a job ID immediately. EVTXs are staged to `<CHAINSAWMCP_JOBS_DIR>/<job_id>/evtx/<source_name>/`. A webhook POST fires when the hunt completes. `--skip-errors` is always enabled.
+Returns a job ID immediately. EVTXs are staged to `<case_dir>/analysis/<job_id>/evtx/<source_name>/`. A webhook POST fires when the hunt completes. `--skip-errors` is always enabled.
 
 ---
 
@@ -435,7 +449,7 @@ start_hunt("host.E01")  /  start_bulk_hunt(["host1.E01", "host2.E01"])
     ├─ spawn monitor         python -m chainsawmcp.monitor <job_id> <config_json>
     │       │
     │       ├─ status → "preparing"
-    │       ├─ stage_evtx(source) → <job_dir>/evtx/<source_stem>/   (one per source)
+    │       ├─ stage_evtx(source) → <case_dir>/analysis/<job_id>/evtx/<source_stem>/   (one per source)
     │       ├─ status → "running"
     │       ├─ chainsaw hunt <job_dir>/evtx/ --json --skip-errors
     │       ├─ updates job.json { status: "complete", hit_count: ..., completed_at: ... }
@@ -452,16 +466,24 @@ load_hunt_results()
 
 ### Staging Layout
 
+Artifacts are written relative to `CHAINSAWMCP_CASE_DIR` (defaults to cwd — typically `/cases/[CASE_ID]/` on a SIFT Workstation):
+
 ```
-CHAINSAWMCP_JOBS_DIR/
-└── <job_id>/
-    ├── job.json
-    ├── hunt_results.json
-    ├── chainsaw_stderr.log
-    └── evtx/
-        ├── base-dc-cdrive/       ← EVTXs from base-dc-cdrive.E01
-        ├── base-rd-01-cdrive/    ← EVTXs from base-rd-01-cdrive.E01
-        └── base-wkstn-01/        ← EVTXs from base-wkstn-01.E01
+<case_dir>/
+├── analysis/
+│   ├── forensic_audit.log        ← appended at end of each Claude session
+│   └── <job_id>/
+│       ├── job.json
+│       ├── hunt_results.json
+│       ├── chainsaw_provenance.json   ← chain-of-custody: command, SHA-256, version
+│       ├── chainsaw_stderr.log
+│       └── evtx/
+│           ├── base-dc-cdrive/        ← EVTXs from base-dc-cdrive.E01
+│           ├── base-rd-01-cdrive/     ← EVTXs from base-rd-01-cdrive.E01
+│           └── base-wkstn-01/         ← EVTXs from base-wkstn-01.E01
+├── exports/                      ← structured exports (future)
+└── reports/
+    └── hunt_report.txt
 ```
 
 ---

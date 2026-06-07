@@ -82,22 +82,42 @@ def get_hunt_timeout() -> int:
         return 1800
 
 
+def get_case_dir() -> Path:
+    """Case root directory. All generated artifacts are written under this path.
+
+    Protocol SIFT standard: launch Claude Code from within /cases/[CASE_ID]/ — cwd resolves
+    correctly with no explicit configuration needed. Set CHAINSAWMCP_CASE_DIR only when
+    launching from outside the case directory (e.g. Claude Desktop, OpenWebUI).
+    """
+    val = os.environ.get("CHAINSAWMCP_CASE_DIR")
+    return Path(val) if val else Path.cwd()
+
+
+def get_analysis_dir() -> Path:
+    """Intermediate data: job state, raw hunt results, EVTX staging. Under <case_dir>/analysis/."""
+    return get_case_dir() / "analysis"
+
+
+def get_exports_dir() -> Path:
+    """Structured exports: CSVs, extracted registry keys, super-timelines. Under <case_dir>/exports/."""
+    return get_case_dir() / "exports"
+
+
+def get_reports_dir() -> Path:
+    """Final forensic reports and audit logs. Under <case_dir>/reports/."""
+    return get_case_dir() / "reports"
+
+
 def get_output_dir() -> Path:
-    """Directory where Chainsaw JSON output is written. Override with CHAINSAW_OUTPUT_DIR."""
+    """Directory where hunt reports are written. Override with CHAINSAW_OUTPUT_DIR."""
     val = os.environ.get("CHAINSAW_OUTPUT_DIR")
-    if val:
-        return Path(val)
-    import tempfile
-    return Path(tempfile.gettempdir()) / "chainsawmcp"
+    return Path(val) if val else get_reports_dir()
 
 
 def get_jobs_dir() -> Path:
     """Directory where detached hunt job state and results are stored. Override with CHAINSAWMCP_JOBS_DIR."""
     val = os.environ.get("CHAINSAWMCP_JOBS_DIR")
-    if val:
-        return Path(val)
-    import tempfile
-    return Path(tempfile.gettempdir()) / "chainsawmcp_jobs"
+    return Path(val) if val else get_analysis_dir()
 
 
 def get_webhook_url() -> str | None:
