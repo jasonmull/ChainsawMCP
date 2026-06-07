@@ -1,12 +1,17 @@
 """Setup helpers: install Chainsaw binary and Sigma rules for SIFT environments."""
 
+import io
 import os
+import platform
+import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 from pathlib import Path
 
 CHAINSAW_REPO_URL = "https://github.com/WithSecureLabs/chainsaw"
+CHAINSAW_RELEASES_API = "https://api.github.com/repos/WithSecureLabs/chainsaw/releases/latest"
 SIGMA_REPO_URL = "https://github.com/SigmaHQ/sigma"
 
 # User-writable XDG paths — no sudo required on a standard Linux install.
@@ -102,6 +107,96 @@ def _cargo_available() -> bool:
     return shutil.which("cargo") is not None
 
 
+def _cargo_version() -> tuple[int, int, int] | None:
+    try:
+        result = subprocess.run(["cargo", "--version"], capture_output=True, text=True, timeout=10)
+        m = re.search(r"cargo (\d+)\.(\d+)\.(\d+)", result.stdout)
+        if m:
+            return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except Exception:
+        pass
+    return None
+
+
+def _cargo_supports_edition2024() -> bool:
+    ver = _cargo_version()
+    return ver is not None and ver >= (1, 85, 0)
+
+
+def _get_prebuilt_asset_url() -> str:
+    """Query the GitHub releases API and return the download URL for the platform binary."""
+    import httpx
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        asset_tag = "x86_64-unknown-linux-gnu"
+    elif machine in ("aarch64", "arm64"):
+        asset_tag = "aarch64-unknown-linux-gnu"
+    else:
+        raise RuntimeError(f"Unsupported architecture: {machine}")
+
+    resp = httpx.get(CHAINSAW_RELEASES_API, timeout=30, follow_redirects=True)
+    resp.raise_for_status()
+    release = resp.json()
+    for asset in release.get("assets", []):
+        name = asset["name"]
+        if asset_tag in name and name.endswith(".tar.gz"):
+            return asset["browser_download_url"]
+    raise RuntimeError(
+        f"No pre-built asset matching '{asset_tag}' in release {release.get('tag_name')}"
+    )
+
+
+def _download_prebuilt_chainsaw(chainsaw_dir: Path) -> None:
+    """Download the latest pre-built Chainsaw release and extract it to chainsaw_dir.
+
+    The platform-specific tarball contains only the binary and mappings.
+    rules/ are fetched via a shallow git clone of the chainsaw repo.
+    """
+    import httpx
+
+    url = _get_prebuilt_asset_url()
+    resp = httpx.get(url, timeout=300, follow_redirects=True)
+    resp.raise_for_status()
+
+    chainsaw_dir.mkdir(parents=True, exist_ok=True)
+
+    with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
+        for member in tar.getmembers():
+            parts = Path(member.name).parts
+            if len(parts) < 2:
+                continue
+            rel = Path(*parts[1:])  # strip leading "chainsaw/" directory component
+            dest = chainsaw_dir / rel
+            if member.isdir():
+                dest.mkdir(parents=True, exist_ok=True)
+            elif member.isfile():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                f = tar.extractfile(member)
+                if f is not None:
+                    dest.write_bytes(f.read())
+                if rel.parts[-1] == "chainsaw":
+                    dest.chmod(dest.stat().st_mode | 0o111)
+
+    # Clone rules/ from the repo — not included in the platform tarball.
+    rules_dest = chainsaw_dir / "rules"
+    if not (rules_dest.is_dir() and _nonempty(rules_dest)):
+        with tempfile.TemporaryDirectory(prefix="chainsaw_rules_") as tmp:
+            src = Path(tmp)
+            subprocess.run(
+                ["git", "clone", "--depth=1", CHAINSAW_REPO_URL, str(src)],
+                check=True,
+                capture_output=True,
+                timeout=300,
+            )
+            for subdir in ("rules", "mappings"):
+                src_sub = src / subdir
+                dst_sub = chainsaw_dir / subdir
+                if src_sub.is_dir():
+                    if dst_sub.exists():
+                        shutil.rmtree(dst_sub)
+                    shutil.copytree(src_sub, dst_sub)
+
+
 def _build_and_install_chainsaw(chainsaw_dir: Path) -> None:
     """Clone the Chainsaw repo, compile with cargo build --release, copy binary and data files."""
     with tempfile.TemporaryDirectory(prefix="chainsaw_src_") as tmp:
@@ -176,16 +271,7 @@ def _setup_chainsaw(
             "path": str(chainsaw_dir),
             "action": "cannot write to install directory — see sudo_instructions",
         }
-    elif not _cargo_available():
-        results["chainsaw"] = {
-            "status": "error",
-            "path": str(chainsaw_dir),
-            "action": (
-                "cargo not found — install Rust first: "
-                "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-            ),
-        }
-    else:
+    elif _cargo_available() and _cargo_supports_edition2024():
         try:
             _build_and_install_chainsaw(chainsaw_dir)
             results["chainsaw"] = {
@@ -204,6 +290,25 @@ def _setup_chainsaw(
             results["chainsaw"] = {
                 "status": "error", "path": str(chainsaw_dir),
                 "action": f"install failed: {e}",
+            }
+    else:
+        # cargo missing or too old (edition2024 requires 1.85+) — download pre-built binary.
+        cargo_ver = _cargo_version()
+        reason = (
+            f"cargo {'.'.join(str(x) for x in cargo_ver)} < 1.85 (edition2024)"
+            if cargo_ver else "cargo not found"
+        )
+        try:
+            _download_prebuilt_chainsaw(chainsaw_dir)
+            results["chainsaw"] = {
+                "status": "installed",
+                "path": str(chainsaw_dir),
+                "action": f"downloaded pre-built binary from GitHub ({reason})",
+            }
+        except Exception as e:
+            results["chainsaw"] = {
+                "status": "error", "path": str(chainsaw_dir),
+                "action": f"pre-built download failed ({reason}): {e}",
             }
 
     if results["chainsaw"]["status"] in ("ok", "installed"):
