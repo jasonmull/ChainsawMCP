@@ -153,12 +153,16 @@ async def start_hunt(
         update_job(job_id, pid=runner_pid)
         evtx_count = None
 
-    from .config import get_case_dir as _get_case_dir, get_webhook_url
-    webhook_note = (
-        "A webhook POST will be sent to your configured URL when the hunt finishes."
-        if get_webhook_url()
-        else "No webhook configured — set CHAINSAWMCP_WEBHOOK_URL to receive a notification."
-    )
+    from .config import get_case_dir as _get_case_dir, get_webhook_url, webhook_url_rejected
+    if get_webhook_url():
+        webhook_note = "A webhook POST will be sent to your configured URL when the hunt finishes."
+    elif webhook_url_rejected():
+        webhook_note = (
+            "WARNING: CHAINSAWMCP_WEBHOOK_URL is set but is not an https:// URL — "
+            "it will be IGNORED. Webhook payloads contain case data and are only sent over HTTPS."
+        )
+    else:
+        webhook_note = "No webhook configured — set CHAINSAWMCP_WEBHOOK_URL to receive a notification."
 
     evtx_line = f"  EVTX files: {evtx_count}\n" if evtx_count is not None else ""
     staging_line = f"  EVTXs staging to: {jdir / 'evtx'}\n" if evtx_count is None else ""
@@ -230,12 +234,16 @@ async def start_bulk_hunt(
     runner_pid = spawn_detached_config(job_id, config)
     update_job(job_id, pid=runner_pid)
 
-    from .config import get_webhook_url
-    webhook_note = (
-        "A webhook POST will be sent to your configured URL when the hunt finishes."
-        if get_webhook_url()
-        else "No webhook configured — set CHAINSAWMCP_WEBHOOK_URL to receive a notification."
-    )
+    from .config import get_webhook_url, webhook_url_rejected
+    if get_webhook_url():
+        webhook_note = "A webhook POST will be sent to your configured URL when the hunt finishes."
+    elif webhook_url_rejected():
+        webhook_note = (
+            "WARNING: CHAINSAWMCP_WEBHOOK_URL is set but is not an https:// URL — "
+            "it will be IGNORED. Webhook payloads contain case data and are only sent over HTTPS."
+        )
+    else:
+        webhook_note = "No webhook configured — set CHAINSAWMCP_WEBHOOK_URL to receive a notification."
 
     source_lines = "\n".join(f"    {p}" for p in valid_paths)
     lines = [

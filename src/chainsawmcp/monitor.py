@@ -92,6 +92,29 @@ def _count_hits(job_id: str) -> tuple[int, int]:
     return len(hits), len(rules)
 
 
+def _validated_webhook_url(job_id: str) -> "str | None":
+    """Return CHAINSAWMCP_WEBHOOK_URL only if it is an https:// URL.
+
+    Webhook payloads include hunt summaries (case data), so plaintext http://
+    targets are rejected. A rejected value is logged to the job dir since the
+    detached runner has no other channel to surface the warning.
+    """
+    url = os.environ.get("CHAINSAWMCP_WEBHOOK_URL")
+    if not url:
+        return None
+    if url.lower().startswith("https://"):
+        return url
+    try:
+        (_job_dir(job_id) / "webhook_error.log").write_text(
+            f"CHAINSAWMCP_WEBHOOK_URL is set but is not https:// — webhook NOT sent.\n"
+            f"URL: {url}\nWebhook payloads contain case data and are only sent over HTTPS.\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+    return None
+
+
 def _post_webhook(url: str, payload: dict) -> None:
     status = payload.get("status", "unknown")
     job_id = payload.get("job_id", "?")
@@ -203,7 +226,7 @@ def _fail_job(job_id: str, error: str, exit_code: int | None = None, stderr: str
         "rules_triggered": 0,
     })
     _write_job(job_id, data)
-    webhook_url = os.environ.get("CHAINSAWMCP_WEBHOOK_URL")
+    webhook_url = _validated_webhook_url(job_id)
     if webhook_url:
         _post_webhook(webhook_url, {
             "job_id": job_id, "status": "error", "hit_count": 0,
@@ -383,7 +406,7 @@ def main() -> None:
     })
     _write_job(job_id, data)
 
-    webhook_url = os.environ.get("CHAINSAWMCP_WEBHOOK_URL")
+    webhook_url = _validated_webhook_url(job_id)
     if webhook_url:
         webhook_payload = {
             "job_id": job_id, "status": status,

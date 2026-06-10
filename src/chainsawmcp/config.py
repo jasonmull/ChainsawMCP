@@ -121,8 +121,25 @@ def get_jobs_dir() -> Path:
 
 
 def get_webhook_url() -> str | None:
-    """Webhook URL to POST when a detached hunt completes. Set CHAINSAWMCP_WEBHOOK_URL."""
-    return os.environ.get("CHAINSAWMCP_WEBHOOK_URL") or None
+    """Webhook URL to POST when a detached hunt completes. Set CHAINSAWMCP_WEBHOOK_URL.
+
+    Only https:// URLs are accepted — webhook payloads include hunt summaries
+    (case data) and must not travel in plaintext. Non-https values are ignored.
+    """
+    url = os.environ.get("CHAINSAWMCP_WEBHOOK_URL")
+    if not url:
+        return None
+    if not url.lower().startswith("https://"):
+        return None
+    return url
+
+
+def webhook_url_rejected() -> str | None:
+    """Return the configured webhook URL if it was set but rejected (non-https), else None."""
+    url = os.environ.get("CHAINSAWMCP_WEBHOOK_URL")
+    if url and not url.lower().startswith("https://"):
+        return url
+    return None
 
 
 def get_batch_size() -> int:
