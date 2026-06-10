@@ -148,12 +148,18 @@ def _chainsaw_version(binary: str) -> str:
 
 def _write_provenance(job_id: str, cmd: list[str], results_file: Path, completed_at: str) -> None:
     """Write chainsaw_provenance.json to the job directory for chain-of-custody."""
+    binary_path = Path(cmd[0])
+    try:
+        binary_sha = _sha256(binary_path) if binary_path.is_file() else "unknown"
+    except OSError:
+        binary_sha = "unknown"
     provenance = {
         "command": cmd,
         "output_file": str(results_file),
         "output_sha256": _sha256(results_file),
         "completed_at": completed_at,
         "chainsaw_version": _chainsaw_version(cmd[0]),
+        "chainsaw_binary_sha256": binary_sha,
     }
     prov_file = results_file.parent / "chainsaw_provenance.json"
     try:
@@ -241,15 +247,23 @@ def _build_chainsaw_cmd(evtx_root: Path, config: dict) -> "list[str] | None":
 
 
 def main() -> None:
-    if len(sys.argv) < 3:
-        print("Usage: python -m chainsawmcp.monitor <job_id> <payload_json>", file=sys.stderr)
+    if len(sys.argv) < 2:
+        print("Usage: python -m chainsawmcp.monitor <job_id> [payload_json]", file=sys.stderr)
         sys.exit(1)
 
     job_id = sys.argv[1]
+
+    # Payload is read from <job_dir>/runner_payload.json (written with 0600 perms
+    # by the spawning process). A literal payload as argv[2] is still accepted for
+    # backward compatibility and ad-hoc invocation.
     try:
-        payload = json.loads(sys.argv[2])
-    except (json.JSONDecodeError, IndexError) as e:
-        print(f"Invalid payload JSON: {e}", file=sys.stderr)
+        if len(sys.argv) >= 3:
+            payload = json.loads(sys.argv[2])
+        else:
+            payload_file = _job_dir(job_id) / "runner_payload.json"
+            payload = json.loads(payload_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, IndexError) as e:
+        print(f"Invalid or missing runner payload: {e}", file=sys.stderr)
         sys.exit(1)
 
     jdir = _job_dir(job_id)

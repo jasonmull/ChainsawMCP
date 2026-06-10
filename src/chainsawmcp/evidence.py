@@ -1,16 +1,42 @@
 """Evidence preparation: validate EVTX directories and mount E01 images."""
 
+import logging
 import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
+_log = logging.getLogger(__name__)
+
 from .config import is_windows
+
+# Upper bound on a single staged EVTX. Windows event logs are typically tens to
+# a few hundred MB; this cap is deliberately generous so it never trips on real
+# evidence, but guards against a malicious image declaring a pathological size.
+_MAX_EVTX_BYTES = 4 * 1024 * 1024 * 1024  # 4 GiB
+_EXTRACT_CHUNK = 8 * 1024 * 1024  # 8 MiB
 
 
 class EvidenceError(Exception):
     pass
+
+
+def _write_tsk_entry(entry: object, size: int, target: Path) -> None:
+    """Stream a pytsk3 file entry to disk in chunks, enforcing a size ceiling."""
+    if size > _MAX_EVTX_BYTES:
+        raise EvidenceError(
+            f"EVTX entry exceeds maximum allowed size "
+            f"({size} > {_MAX_EVTX_BYTES} bytes): {target.name}"
+        )
+    offset = 0
+    with target.open("wb") as fh:
+        while offset < size:
+            chunk = entry.read_random(offset, min(_EXTRACT_CHUNK, size - offset))  # type: ignore[attr-defined]
+            if not chunk:
+                break
+            fh.write(chunk)
+            offset += len(chunk)
 
 
 class PreparedEvidence:
@@ -183,12 +209,18 @@ def _extract_e01_rootless(first_segment: Path, dest: Path) -> None:
                 size = entry.info.meta.size
                 if not size:
                     continue
-                target = dest / name
+                # Use the basename only — entry names come from the (untrusted)
+                # image and must not be able to escape the staging directory.
+                safe_name = Path(name.replace("\\", "/")).name
+                if not safe_name:
+                    continue
+                target = dest / safe_name
                 if target.exists():
-                    target = dest / f"{Path(name).stem}_{copied}.evtx"
-                target.write_bytes(entry.read_random(0, size))
+                    target = dest / f"{Path(safe_name).stem}_{copied}.evtx"
+                _write_tsk_entry(entry, size, target)
                 copied += 1
-            except Exception:
+            except Exception as exc:
+                _log.warning("Skipped an EVTX entry during extraction: %s", exc)
                 continue
         return copied
 
@@ -211,12 +243,16 @@ def _extract_e01_rootless(first_segment: Path, dest: Path) -> None:
                     except Exception:
                         continue
                 elif name.lower().endswith(".evtx") and meta.size:
-                    target = dest / name
+                    safe_name = Path(name.replace("\\", "/")).name
+                    if not safe_name:
+                        continue
+                    target = dest / safe_name
                     if target.exists():
-                        target = dest / f"{Path(name).stem}_{copied}.evtx"
-                    target.write_bytes(entry.read_random(0, meta.size))
+                        target = dest / f"{Path(safe_name).stem}_{copied}.evtx"
+                    _write_tsk_entry(entry, meta.size, target)
                     copied += 1
-            except Exception:
+            except Exception as exc:
+                _log.warning("Skipped a filesystem entry during extraction: %s", exc)
                 continue
         return copied
 
