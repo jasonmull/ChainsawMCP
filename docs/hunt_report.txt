@@ -1,0 +1,803 @@
+========================================================================
+  ChainsawMCP — ANALYST REPORT
+========================================================================
+Generated : 2026-06-13T16:34:23Z
+Evidence  : bulk:/cases/FINDEVIL/base-rd-01-cdrive.E01,/cases/FINDEVIL/base-rd-02-cdrive.E01
+Total hits: 23306
+Rules hit : 80
+
+------------------------------------------------------------------------
+DETECTIONS BY RULE
+------------------------------------------------------------------------
+
+Rule     : User Logoff Event
+Severity : info
+Hits     : 13209
+Events:
+  [2018-05-04T22:16:46.632649+00:00] EventID=4647 Computer=win10-test
+  [2018-05-04T22:16:46.632649+00:00] EventID=4647 Computer=win10-test
+  [2018-05-07T19:25:03.958427+00:00] EventID=4634 Computer=MICROSO-RJNOKU1
+  [2018-05-07T19:25:03.958528+00:00] EventID=4634 Computer=MICROSO-RJNOKU1
+  [2018-05-07T19:25:05.574468+00:00] EventID=4634 Computer=MICROSO-F9QCQ4I
+  ... and 13204 more event(s)
+
+Rule     : Network Logon
+Severity : info
+Hits     : 7760
+Events:
+  [2018-05-08T04:54:12.947770+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-05-08T05:01:26.407695+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-05-14T00:42:40.558420+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-05-14T00:54:40.627466+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-05-14T01:06:40.691306+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  ... and 7755 more event(s)
+
+Rule     : Remote Service Creation
+Severity : medium
+Hits     : 537
+Events:
+  [2018-05-08T14:35:43.406699+00:00] EventID=4697 Computer=base-rd-02.shieldbase.lan
+  [2018-05-08T14:35:43.408537+00:00] EventID=4697 Computer=base-rd-02.shieldbase.lan
+  [2018-05-08T14:35:43.409445+00:00] EventID=4697 Computer=base-rd-02.shieldbase.lan
+  [2018-05-08T14:35:43.410703+00:00] EventID=4697 Computer=base-rd-02.shieldbase.lan
+  [2018-05-08T14:35:43.413228+00:00] EventID=4697 Computer=base-rd-02.shieldbase.lan
+  ... and 532 more event(s)
+
+Rule     : User Profile Disk - Registry file loaded
+Severity : info
+Hits     : 340
+Events:
+  [2018-05-04T18:15:57.806695+00:00] EventID=5 Computer=win10-test
+  [2018-05-04T18:15:57.806695+00:00] EventID=5 Computer=win10-test
+  [2018-05-04T18:15:57.844247+00:00] EventID=5 Computer=win10-test
+  [2018-05-04T18:15:57.844247+00:00] EventID=5 Computer=win10-test
+  [2018-05-04T18:15:58.349076+00:00] EventID=5 Computer=win10-test
+  ... and 335 more event(s)
+
+Rule     : PowerShell - Engine state is changed from None to Available
+Severity : info
+Hits     : 239
+Events:
+  [2018-05-04T22:14:16.380301+00:00] EventID=400 Computer=win10-test
+  [2018-05-04T22:14:16.380301+00:00] EventID=400 Computer=win10-test
+  [2018-05-04T22:14:26.318109+00:00] EventID=400 Computer=win10-test
+  [2018-05-04T22:14:26.318109+00:00] EventID=400 Computer=win10-test
+  [2018-05-14T05:19:33.023467+00:00] EventID=400 Computer=base-rd-01.shieldbase.lan
+  ... and 234 more event(s)
+
+Rule     : PowerShell - Engine state is changed from Available to Stopped
+Severity : info
+Hits     : 175
+Events:
+  [2018-05-04T22:14:19.192882+00:00] EventID=403 Computer=win10-test
+  [2018-05-04T22:14:19.192882+00:00] EventID=403 Computer=win10-test
+  [2018-05-04T22:14:27.568123+00:00] EventID=403 Computer=win10-test
+  [2018-05-04T22:14:27.568123+00:00] EventID=403 Computer=win10-test
+  [2018-05-14T05:19:35.008058+00:00] EventID=403 Computer=base-rd-01.shieldbase.lan
+  ... and 170 more event(s)
+
+Rule     : Rare Service Installations
+Severity : low
+Hits     : 80
+Events:
+  [2018-05-07T19:24:10.547458+00:00] EventID=? Computer=?
+  [2018-05-07T19:24:11.692235+00:00] EventID=? Computer=?
+  [2018-05-07T19:25:28.991974+00:00] EventID=? Computer=?
+  [2018-05-07T19:25:34.039729+00:00] EventID=? Computer=?
+  [2018-05-07T19:29:05.096738+00:00] EventID=? Computer=?
+  ... and 75 more event(s)
+
+Rule     : Firewall Rule Modified In The Windows Firewall Exception List
+Severity : low
+Hits     : 67
+Events:
+  [2018-08-08T19:32:37.860938+00:00] EventID=2005 Computer=base-rd-01.shieldbase.lan
+  [2018-08-10T01:33:14.734809+00:00] EventID=2005 Computer=base-rd-02.shieldbase.lan
+  [2018-09-04T22:33:16.836345+00:00] EventID=2005 Computer=base-rd-01.shieldbase.lan
+  [2018-09-06T18:28:04.287912+00:00] EventID=2005 Computer=base-rd-01.shieldbase.lan
+  [2018-09-06T18:28:04.304338+00:00] EventID=2005 Computer=base-rd-01.shieldbase.lan
+  ... and 62 more event(s)
+
+Rule     : Suspicious Remote Logon with Explicit Credentials
+Severity : medium
+Hits     : 62
+Events:
+  [2018-08-28T22:08:24.674014+00:00] EventID=4648 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T22:16:14.860562+00:00] EventID=4648 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T22:16:20.335501+00:00] EventID=4648 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T22:16:21.072609+00:00] EventID=4648 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T22:16:21.704664+00:00] EventID=4648 Computer=base-rd-01.shieldbase.lan
+  ... and 57 more event(s)
+
+Rule     : RDS - Session logoff succeeded
+Severity : info
+Hits     : 56
+Events:
+  [2018-05-04T22:16:46.663794+00:00] EventID=23 Computer=win10-test
+  [2018-05-04T22:16:46.663794+00:00] EventID=23 Computer=win10-test
+  [2018-05-07T19:25:40.449537+00:00] EventID=23 Computer=MICROSO-F9QCQ4I
+  [2018-05-07T19:25:46.134518+00:00] EventID=23 Computer=MICROSO-RJNOKU1
+  [2018-05-08T14:34:48.619089+00:00] EventID=23 Computer=base-rd-02.shieldbase.lan
+  ... and 51 more event(s)
+
+Rule     : Potential PowerShell Obfuscation Using Alias Cmdlets
+Severity : low
+Hits     : 52
+Events:
+  [2018-08-15T16:42:35.513674+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-15T17:07:22.594392+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  [2018-08-15T17:07:22.648662+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-15T17:10:14.079711+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  [2018-08-15T17:10:17.228991+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  ... and 47 more event(s)
+
+Rule     : VSSAudit Security Event Source Registration
+Severity : info
+Hits     : 34
+Events:
+  [2018-07-18T01:11:01.204611+00:00] EventID=4904 Computer=base-rd-02.shieldbase.lan
+  [2018-07-18T01:11:01.206182+00:00] EventID=4905 Computer=base-rd-02.shieldbase.lan
+  [2018-07-18T01:13:22.172086+00:00] EventID=4904 Computer=base-rd-01.shieldbase.lan
+  [2018-07-18T01:13:22.174187+00:00] EventID=4905 Computer=base-rd-01.shieldbase.lan
+  [2018-07-20T14:27:33.507899+00:00] EventID=4904 Computer=base-rd-01.shieldbase.lan
+  ... and 29 more event(s)
+
+Rule     : Locked Workstation
+Severity : info
+Hits     : 34
+Events:
+  [2018-07-22T03:06:05.778933+00:00] EventID=4800 Computer=base-rd-01.shieldbase.lan
+  [2018-07-29T04:02:04.980264+00:00] EventID=4800 Computer=base-rd-02.shieldbase.lan
+  [2018-07-29T12:27:14.026531+00:00] EventID=4800 Computer=base-rd-02.shieldbase.lan
+  [2018-08-02T21:02:22.501342+00:00] EventID=4800 Computer=base-rd-01.shieldbase.lan
+  [2018-08-04T16:12:01.361962+00:00] EventID=4800 Computer=base-rd-02.shieldbase.lan
+  ... and 29 more event(s)
+
+Rule     : Malicious PowerShell Keywords
+Severity : medium
+Hits     : 33
+Events:
+  [2018-08-28T15:42:39.975750+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T15:42:56.414831+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T15:42:56.564945+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T16:43:40.466865+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T16:43:51.767127+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  ... and 28 more event(s)
+
+Rule     : WinAPI Function Calls Via PowerShell Scripts
+Severity : medium
+Hits     : 33
+Events:
+  [2018-08-28T15:42:39.975750+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T15:42:56.414831+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T15:42:56.564945+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T16:43:40.466865+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T16:43:51.767127+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  ... and 28 more event(s)
+
+Rule     : RDP Logon
+Severity : info
+Hits     : 30
+Events:
+  [2018-07-18T15:07:49.367846+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-07-26T03:43:59.968873+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T21:39:08.243273+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T21:39:08.243304+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:17:04.778557+00:00] EventID=4624 Computer=base-rd-02.shieldbase.lan
+  ... and 25 more event(s)
+
+Rule     : RDP logon
+Severity : critical
+Hits     : 30
+Events:
+  [2018-07-18T15:07:49.367846+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-07-26T03:43:59.968873+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T21:39:08.243273+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T21:39:08.243304+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:17:04.778557+00:00] EventID=4624 Computer=base-rd-02.shieldbase.lan
+  ... and 25 more event(s)
+
+Rule     : Suspicious Get-WmiObject
+Severity : low
+Hits     : 30
+Events:
+  [2018-08-15T07:20:59.656848+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  [2018-08-15T07:21:00.347115+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  [2018-08-15T07:21:00.869106+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  [2018-08-15T07:21:01.303251+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  [2018-08-15T07:21:02.138010+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  ... and 25 more event(s)
+
+Rule     : Suspicious PowerShell Invocations - Specific
+Severity : high
+Hits     : 30
+Events:
+  [2018-08-28T15:42:38.173443+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T18:31:07.653791+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T18:31:09.132961+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T18:31:09.300075+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T18:31:17.968357+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  ... and 25 more event(s)
+
+Rule     : RDP Session Disconnected
+Severity : critical
+Hits     : 29
+Events:
+  [2018-07-11T05:44:01.071668+00:00] EventID=24 Computer=base-rd-01.shieldbase.lan
+  [2018-07-17T19:06:57.609093+00:00] EventID=24 Computer=base-rd-01.shieldbase.lan
+  [2018-07-18T15:03:35.491351+00:00] EventID=24 Computer=base-rd-01.shieldbase.lan
+  [2018-07-18T15:04:26.089616+00:00] EventID=24 Computer=base-rd-01.shieldbase.lan
+  [2018-07-18T15:15:05.131109+00:00] EventID=24 Computer=base-rd-01.shieldbase.lan
+  ... and 24 more event(s)
+
+Rule     : Suspicious PowerShell Invocations - Generic - PowerShell Module
+Severity : high
+Hits     : 28
+Events:
+  [2018-09-06T20:30:03.354978+00:00] EventID=4103 Computer=base-rd-01.shieldbase.lan
+  [2018-09-06T20:30:04.090810+00:00] EventID=4103 Computer=base-rd-01.shieldbase.lan
+  [2018-09-06T20:30:04.092787+00:00] EventID=4103 Computer=base-rd-01.shieldbase.lan
+  [2018-09-06T20:30:04.275143+00:00] EventID=4103 Computer=base-rd-01.shieldbase.lan
+  [2018-09-06T20:30:04.291922+00:00] EventID=4103 Computer=base-rd-01.shieldbase.lan
+  ... and 23 more event(s)
+
+Rule     : Suspicious FromBase64String Usage On Gzip Archive - Ps Script
+Severity : medium
+Hits     : 24
+Events:
+  [2018-08-28T15:42:39.862542+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T16:43:39.351331+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T18:31:09.088779+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T18:31:18.893905+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T21:40:21.094173+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  ... and 19 more event(s)
+
+Rule     : Potential Suspicious PowerShell Keywords
+Severity : medium
+Hits     : 22
+Events:
+  [2018-08-28T15:42:39.975750+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T15:42:56.414831+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T16:43:40.466865+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T16:43:51.767127+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:08:50.536815+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  ... and 17 more event(s)
+
+Rule     : WinAPI Library Calls Via PowerShell Scripts
+Severity : medium
+Hits     : 22
+Events:
+  [2018-08-28T15:42:39.975750+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T15:42:56.414831+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T16:43:40.466865+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T16:43:51.767127+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:08:50.536815+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  ... and 17 more event(s)
+
+Rule     : PowerShell ShellCode
+Severity : high
+Hits     : 22
+Events:
+  [2018-08-28T15:42:39.975750+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T15:42:56.414831+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T16:43:40.466865+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T16:43:51.767127+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:08:50.536815+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  ... and 17 more event(s)
+
+Rule     : Windows Firewall Settings Have Been Changed
+Severity : low
+Hits     : 20
+Events:
+  [2018-08-08T04:57:55.670005+00:00] EventID=2008 Computer=base-rd-01.shieldbase.lan
+  [2018-08-10T05:34:30.036275+00:00] EventID=2008 Computer=base-rd-02.shieldbase.lan
+  [2018-08-10T06:33:56.426871+00:00] EventID=2008 Computer=base-rd-01.shieldbase.lan
+  [2018-08-11T23:52:30.432793+00:00] EventID=2008 Computer=base-rd-02.shieldbase.lan
+  [2018-08-12T00:09:55.152773+00:00] EventID=2008 Computer=base-rd-01.shieldbase.lan
+  ... and 15 more event(s)
+
+Rule     : RDP Session Connected
+Severity : critical
+Hits     : 18
+Events:
+  [2018-07-11T05:42:20.246317+00:00] EventID=25 Computer=base-rd-01.shieldbase.lan
+  [2018-07-17T19:03:47.216709+00:00] EventID=25 Computer=base-rd-01.shieldbase.lan
+  [2018-07-18T15:01:32.375290+00:00] EventID=25 Computer=base-rd-01.shieldbase.lan
+  [2018-07-18T15:03:44.713595+00:00] EventID=25 Computer=base-rd-01.shieldbase.lan
+  [2018-07-18T15:07:50.734122+00:00] EventID=25 Computer=base-rd-01.shieldbase.lan
+  ... and 13 more event(s)
+
+Rule     : Windows Defender Threat Detection Disabled
+Severity : high
+Hits     : 16
+Events:
+  [2018-05-07T19:24:23.600578+00:00] EventID=5010 Computer=win10-test
+  [2018-05-07T19:24:25.075861+00:00] EventID=5010 Computer=win10-test
+  [2018-05-09T14:47:57.721746+00:00] EventID=5012 Computer=base-rd-02.shieldbase.lan
+  [2018-05-09T14:47:57.721775+00:00] EventID=5010 Computer=base-rd-02.shieldbase.lan
+  [2018-05-09T14:48:01.795323+00:00] EventID=5012 Computer=base-rd-01.shieldbase.lan
+  ... and 11 more event(s)
+
+Rule     : Uncommon New Firewall Rule Added In Windows Firewall Exception List
+Severity : medium
+Hits     : 16
+Events:
+  [2018-09-06T18:28:31.037869+00:00] EventID=2004 Computer=base-rd-01.shieldbase.lan
+  [2018-09-06T18:28:31.041631+00:00] EventID=2004 Computer=base-rd-01.shieldbase.lan
+  [2018-09-06T19:03:28.148271+00:00] EventID=2004 Computer=base-rd-02.shieldbase.lan
+  [2018-09-06T19:03:28.153306+00:00] EventID=2004 Computer=base-rd-02.shieldbase.lan
+  [2018-09-06T19:03:28.157499+00:00] EventID=2004 Computer=base-rd-02.shieldbase.lan
+  ... and 11 more event(s)
+
+Rule     : Volume Shadow Copy Mount
+Severity : low
+Hits     : 13
+Events:
+  [2018-07-20T14:27:31.550839+00:00] EventID=98 Computer=base-rd-01.shieldbase.lan
+  [2018-07-20T20:20:03.119405+00:00] EventID=98 Computer=base-rd-02.shieldbase.lan
+  [2018-07-29T23:44:53.172515+00:00] EventID=98 Computer=base-rd-02.shieldbase.lan
+  [2018-08-02T03:58:09.630472+00:00] EventID=98 Computer=base-rd-01.shieldbase.lan
+  [2018-08-04T15:53:56.464713+00:00] EventID=98 Computer=base-rd-02.shieldbase.lan
+  ... and 8 more event(s)
+
+Rule     : RDS - Session logon succeeded
+Severity : info
+Hits     : 11
+Events:
+  [2018-08-28T21:39:18.236625+00:00] EventID=21 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:17:10.581240+00:00] EventID=21 Computer=base-rd-02.shieldbase.lan
+  [2018-08-31T00:41:45.777406+00:00] EventID=21 Computer=base-rd-02.shieldbase.lan
+  [2018-08-31T14:52:33.393336+00:00] EventID=21 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T15:21:30.776276+00:00] EventID=21 Computer=base-rd-01.shieldbase.lan
+  ... and 6 more event(s)
+
+Rule     : RDS - File Explorer shell start notification received
+Severity : info
+Hits     : 11
+Events:
+  [2018-08-28T21:39:19.058908+00:00] EventID=22 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:17:11.124857+00:00] EventID=22 Computer=base-rd-02.shieldbase.lan
+  [2018-08-31T00:41:46.340531+00:00] EventID=22 Computer=base-rd-02.shieldbase.lan
+  [2018-08-31T14:52:34.242344+00:00] EventID=22 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T15:21:31.315257+00:00] EventID=22 Computer=base-rd-01.shieldbase.lan
+  ... and 6 more event(s)
+
+Rule     : Outgoing Logon with New Credentials
+Severity : low
+Hits     : 10
+Events:
+  [2018-08-30T22:45:25.943649+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:06:55.918015+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:08:47.330664+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:09:13.095276+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:09:43.043815+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  ... and 5 more event(s)
+
+Rule     : Windows Defender Malware And PUA Scanning Disabled
+Severity : high
+Hits     : 9
+Events:
+  [2018-05-07T19:24:23.600578+00:00] EventID=5010 Computer=win10-test
+  [2018-05-07T19:24:25.075861+00:00] EventID=5010 Computer=win10-test
+  [2018-05-09T14:47:57.721775+00:00] EventID=5010 Computer=base-rd-02.shieldbase.lan
+  [2018-05-09T14:48:01.795477+00:00] EventID=5010 Computer=base-rd-01.shieldbase.lan
+  [2018-05-09T14:49:50.613083+00:00] EventID=5010 Computer=base-rd-02.shieldbase.lan
+  ... and 4 more event(s)
+
+Rule     : User Added to Local Group
+Severity : info
+Hits     : 9
+Events:
+  [2018-05-07T19:24:55.956271+00:00] EventID=4732 Computer=MICROSO-RJNOKU1
+  [2018-05-07T19:24:56.076322+00:00] EventID=4732 Computer=MICROSO-RJNOKU1
+  [2018-05-07T19:24:59.035812+00:00] EventID=4732 Computer=MICROSO-F9QCQ4I
+  [2018-05-07T19:24:59.106363+00:00] EventID=4732 Computer=MICROSO-F9QCQ4I
+  [2018-05-07T19:26:39.558306+00:00] EventID=4732 Computer=base-rd-01
+  ... and 4 more event(s)
+
+Rule     : Unlock Logon
+Severity : info
+Hits     : 9
+Events:
+  [2018-07-18T15:08:03.107543+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-07-20T15:14:18.022501+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-07-23T14:49:23.068526+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-07-26T04:26:23.295533+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-07-26T04:26:52.242823+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  ... and 4 more event(s)
+
+Rule     : Suspicious Paths Service Installation
+Severity : medium
+Hits     : 8
+Events:
+  [2018-05-07T19:24:10.547458+00:00] EventID=7045 Computer=win10-test
+  [2018-05-07T19:24:11.692235+00:00] EventID=7045 Computer=win10-test
+  [2018-05-09T14:49:10.125948+00:00] EventID=7045 Computer=base-rd-02.shieldbase.lan
+  [2018-05-09T14:49:11.303489+00:00] EventID=7045 Computer=base-rd-01.shieldbase.lan
+  [2018-05-09T14:49:42.172709+00:00] EventID=7045 Computer=base-rd-02.shieldbase.lan
+  ... and 3 more event(s)
+
+Rule     : T1053.005 - Scheduled Task was Created
+Severity : info
+Hits     : 8
+Events:
+  [2018-08-25T20:44:33.835108+00:00] EventID=106 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T21:41:32.637789+00:00] EventID=106 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T21:43:58.356773+00:00] EventID=106 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T13:53:51.953916+00:00] EventID=106 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T13:53:52.506058+00:00] EventID=106 Computer=base-rd-01.shieldbase.lan
+  ... and 3 more event(s)
+
+Rule     : Rare Scheduled Task Creations
+Severity : low
+Hits     : 8
+Events:
+  [2018-08-25T20:44:33.835108+00:00] EventID=? Computer=?
+  [2018-08-28T21:41:32.637789+00:00] EventID=? Computer=?
+  [2018-08-28T21:43:58.356773+00:00] EventID=? Computer=?
+  [2018-08-30T13:53:51.953916+00:00] EventID=? Computer=?
+  [2018-08-30T13:53:52.506058+00:00] EventID=? Computer=?
+  ... and 3 more event(s)
+
+Rule     : Suspicious PowerShell Invocations - Generic
+Severity : high
+Hits     : 8
+Events:
+  [2018-08-30T18:31:09.132961+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T18:31:09.300075+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T18:31:18.920829+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T21:40:21.115947+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T21:40:43.825536+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  ... and 3 more event(s)
+
+Rule     : Suspicious PowerShell Download - Powershell Script
+Severity : medium
+Hits     : 8
+Events:
+  [2018-08-31T00:21:59.428658+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  [2018-08-31T00:42:52.352394+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  [2018-08-31T00:43:09.677471+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  [2018-08-31T00:43:21.341727+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  [2018-09-06T20:30:02.730411+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  ... and 3 more event(s)
+
+Rule     : Windows Service Terminated With Error
+Severity : low
+Hits     : 7
+Events:
+  [2018-05-07T15:24:05.453427+00:00] EventID=7023 Computer=win10-test
+  [2018-05-07T15:24:06.497609+00:00] EventID=7023 Computer=win10-test
+  [2018-05-09T14:49:48.188302+00:00] EventID=7023 Computer=base-rd-02.shieldbase.lan
+  [2018-05-09T14:49:48.266428+00:00] EventID=7023 Computer=base-rd-02.shieldbase.lan
+  [2018-05-09T14:49:50.777910+00:00] EventID=7023 Computer=base-rd-01.shieldbase.lan
+  ... and 2 more event(s)
+
+Rule     : Windows Defender Virus Scanning Feature Disabled
+Severity : high
+Hits     : 7
+Events:
+  [2018-05-09T14:47:57.721746+00:00] EventID=5012 Computer=base-rd-02.shieldbase.lan
+  [2018-05-09T14:48:01.795323+00:00] EventID=5012 Computer=base-rd-01.shieldbase.lan
+  [2018-05-09T14:49:50.613051+00:00] EventID=5012 Computer=base-rd-02.shieldbase.lan
+  [2018-05-09T14:49:52.283764+00:00] EventID=5012 Computer=base-rd-01.shieldbase.lan
+  [2018-05-30T02:40:53.909346+00:00] EventID=5012 Computer=base-rd-02.shieldbase.lan
+  ... and 2 more event(s)
+
+Rule     : NTLMv1 Logon Between Client and Server
+Severity : medium
+Hits     : 7
+Events:
+  [2018-05-31T18:07:15.287223+00:00] EventID=6038 Computer=base-rd-01.shieldbase.lan
+  [2018-07-11T05:42:11.213598+00:00] EventID=6038 Computer=base-rd-01.shieldbase.lan
+  [2018-07-18T01:10:59.848440+00:00] EventID=6038 Computer=base-rd-02.shieldbase.lan
+  [2018-08-06T19:26:22.883546+00:00] EventID=6038 Computer=base-rd-01.shieldbase.lan
+  [2018-08-19T03:57:49.794831+00:00] EventID=6038 Computer=base-rd-02.shieldbase.lan
+  ... and 2 more event(s)
+
+Rule     : A Rule Has Been Deleted From The Windows Firewall Exception List
+Severity : medium
+Hits     : 7
+Events:
+  [2018-08-08T19:32:37.901102+00:00] EventID=2006 Computer=base-rd-01.shieldbase.lan
+  [2018-08-10T01:33:14.804260+00:00] EventID=2006 Computer=base-rd-02.shieldbase.lan
+  [2018-09-04T22:33:16.908885+00:00] EventID=2006 Computer=base-rd-01.shieldbase.lan
+  [2018-09-06T20:25:20.083781+00:00] EventID=2006 Computer=base-rd-01.shieldbase.lan
+  [2018-09-06T20:25:20.101550+00:00] EventID=2006 Computer=base-rd-01.shieldbase.lan
+  ... and 2 more event(s)
+
+Rule     : System Logs Cleared
+Severity : high
+Hits     : 6
+Events:
+  [2018-05-04T22:14:29.114949+00:00] EventID=104 Computer=win10-test
+  [2018-05-04T22:14:29.114949+00:00] EventID=104 Computer=win10-test
+  [2018-05-04T22:14:29.130575+00:00] EventID=104 Computer=win10-test
+  [2018-05-04T22:14:29.130575+00:00] EventID=104 Computer=win10-test
+  [2018-05-04T22:14:29.146196+00:00] EventID=104 Computer=win10-test
+  ... and 1 more event(s)
+
+Rule     : Important Windows Eventlog Cleared
+Severity : high
+Hits     : 6
+Events:
+  [2018-05-04T22:14:29.114949+00:00] EventID=104 Computer=win10-test
+  [2018-05-04T22:14:29.114949+00:00] EventID=104 Computer=win10-test
+  [2018-05-04T22:14:29.130575+00:00] EventID=104 Computer=win10-test
+  [2018-05-04T22:14:29.130575+00:00] EventID=104 Computer=win10-test
+  [2018-05-04T22:14:29.146196+00:00] EventID=104 Computer=win10-test
+  ... and 1 more event(s)
+
+Rule     : Failed Logins with Different Accounts from Single Source System
+Severity : medium
+Hits     : 6
+Events:
+  [2018-05-08T14:37:05.754679+00:00] EventID=? Computer=?
+  [2018-05-08T14:37:10.478473+00:00] EventID=? Computer=?
+  [2018-05-14T15:05:26.379796+00:00] EventID=? Computer=?
+  [2018-07-26T04:04:39.144549+00:00] EventID=? Computer=?
+  [2018-08-24T18:15:47.759580+00:00] EventID=? Computer=?
+  ... and 1 more event(s)
+
+Rule     : Suspicious Rejected SMB Guest Logon From IP
+Severity : medium
+Hits     : 6
+Events:
+  [2018-05-08T21:51:51.977151+00:00] EventID=31017 Computer=base-rd-02.shieldbase.lan
+  [2018-05-08T21:51:51.992649+00:00] EventID=31017 Computer=base-rd-02.shieldbase.lan
+  [2018-05-08T21:51:52.000923+00:00] EventID=31017 Computer=base-rd-02.shieldbase.lan
+  [2018-05-08T21:51:52.373881+00:00] EventID=31017 Computer=base-rd-01.shieldbase.lan
+  [2018-05-08T21:51:52.389499+00:00] EventID=31017 Computer=base-rd-01.shieldbase.lan
+  ... and 1 more event(s)
+
+Rule     : Suspicious Get Information for SMB Share
+Severity : low
+Hits     : 6
+Events:
+  [2018-08-15T16:40:20.999402+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  [2018-08-15T16:40:20.999478+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  [2018-08-15T16:40:21.220979+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-15T16:40:21.221010+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-15T16:40:21.221101+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  ... and 1 more event(s)
+
+Rule     : Suspicious Service Installation
+Severity : high
+Hits     : 6
+Events:
+  [2018-08-28T00:57:32.856787+00:00] EventID=7045 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T01:05:03.126827+00:00] EventID=7045 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T01:09:03.317352+00:00] EventID=7045 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T16:42:44.937343+00:00] EventID=7045 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:09:13.308203+00:00] EventID=7045 Computer=base-rd-02.shieldbase.lan
+  ... and 1 more event(s)
+
+Rule     : CobaltStrike Service Installations - System
+Severity : critical
+Hits     : 6
+Events:
+  [2018-08-28T00:57:32.856787+00:00] EventID=7045 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T01:05:03.126827+00:00] EventID=7045 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T01:09:03.317352+00:00] EventID=7045 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T16:42:44.937343+00:00] EventID=7045 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:09:13.308203+00:00] EventID=7045 Computer=base-rd-02.shieldbase.lan
+  ... and 1 more event(s)
+
+Rule     : CobaltStrike Service Installations - Security
+Severity : high
+Hits     : 6
+Events:
+  [2018-08-28T00:57:32.858917+00:00] EventID=4697 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T01:05:03.135052+00:00] EventID=4697 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T01:09:03.328899+00:00] EventID=4697 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T16:42:44.938989+00:00] EventID=4697 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:09:13.311665+00:00] EventID=4697 Computer=base-rd-02.shieldbase.lan
+  ... and 1 more event(s)
+
+Rule     : T1070.009 - Scheduled Task was Deleted
+Severity : info
+Hits     : 6
+Events:
+  [2018-08-28T21:43:58.323192+00:00] EventID=141 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T13:53:50.802166+00:00] EventID=141 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T13:53:52.246367+00:00] EventID=141 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T13:53:54.885499+00:00] EventID=141 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T13:53:55.378856+00:00] EventID=141 Computer=base-rd-01.shieldbase.lan
+  ... and 1 more event(s)
+
+Rule     : Malicious Nishang PowerShell Commandlets
+Severity : high
+Hits     : 6
+Events:
+  [2018-08-30T18:31:09.132961+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T18:31:18.920829+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T21:40:21.115947+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-30T21:40:43.825536+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:44:08.117583+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  ... and 1 more event(s)
+
+Rule     : DPAPI Domain Master Key Backup Attempt
+Severity : medium
+Hits     : 5
+Events:
+  [2018-07-18T01:08:56.108135+00:00] EventID=4692 Computer=base-rd-02.shieldbase.lan
+  [2018-07-29T03:26:31.880131+00:00] EventID=4692 Computer=base-rd-02.shieldbase.lan
+  [2018-08-09T19:31:22.479084+00:00] EventID=4692 Computer=base-rd-01.shieldbase.lan
+  [2018-08-28T21:39:44.832058+00:00] EventID=4692 Computer=base-rd-01.shieldbase.lan
+  [2018-08-31T00:18:20.805187+00:00] EventID=4692 Computer=base-rd-02.shieldbase.lan
+
+Rule     : Unauthorized System Time Modification
+Severity : low
+Hits     : 4
+Events:
+  [2018-05-07T19:24:24.009124+00:00] EventID=4616 Computer=win10-test
+  [2018-05-07T19:24:25.386528+00:00] EventID=4616 Computer=win10-test
+  [2018-05-07T19:24:53.771432+00:00] EventID=4616 Computer=MICROSO-RJNOKU1
+  [2018-05-07T19:24:56.508641+00:00] EventID=4616 Computer=MICROSO-F9QCQ4I
+
+Rule     : Account Brute Force
+Severity : info
+Hits     : 4
+Events:
+  [2018-05-08T14:37:05.754679+00:00] EventID=? Computer=?
+  [2018-05-08T14:37:10.478473+00:00] EventID=? Computer=?
+  [2018-05-14T15:05:26.379796+00:00] EventID=? Computer=?
+  [2018-08-24T18:51:44.154372+00:00] EventID=? Computer=?
+
+Rule     : Windows Pcap Drivers
+Severity : medium
+Hits     : 4
+Events:
+  [2018-05-08T21:07:39.748415+00:00] EventID=4697 Computer=base-rd-01.shieldbase.lan
+  [2018-05-08T21:07:57.135234+00:00] EventID=4697 Computer=base-rd-01.shieldbase.lan
+  [2018-05-08T21:13:15.920618+00:00] EventID=4697 Computer=base-rd-02.shieldbase.lan
+  [2018-05-08T21:13:34.610391+00:00] EventID=4697 Computer=base-rd-02.shieldbase.lan
+
+Rule     : Suspicious Get Information for SMB Share - PowerShell Module
+Severity : low
+Hits     : 4
+Events:
+  [2018-08-15T16:40:21.002170+00:00] EventID=4103 Computer=base-rd-02.shieldbase.lan
+  [2018-08-15T16:40:21.004694+00:00] EventID=4103 Computer=base-rd-02.shieldbase.lan
+  [2018-08-15T16:40:21.223365+00:00] EventID=4103 Computer=base-rd-01.shieldbase.lan
+  [2018-08-15T16:40:21.228110+00:00] EventID=4103 Computer=base-rd-01.shieldbase.lan
+
+Rule     : Bad Opsec Powershell Code Artifacts
+Severity : critical
+Hits     : 4
+Events:
+  [2018-08-30T13:51:28.327653+00:00] EventID=4103 Computer=base-rd-01.shieldbase.lan
+  [2018-09-06T17:13:36.195519+00:00] EventID=4103 Computer=base-rd-02.shieldbase.lan
+  [2018-09-06T20:25:17.935088+00:00] EventID=4103 Computer=base-rd-01.shieldbase.lan
+  [2018-09-07T04:19:01.795064+00:00] EventID=4103 Computer=base-rd-02.shieldbase.lan
+
+Rule     : Successful Account Login Via WMI
+Severity : low
+Hits     : 4
+Events:
+  [2018-09-06T20:30:00.153425+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-09-06T20:31:00.402529+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+  [2018-09-07T04:23:55.024542+00:00] EventID=4624 Computer=base-rd-02.shieldbase.lan
+  [2018-09-07T04:24:55.268809+00:00] EventID=4624 Computer=base-rd-02.shieldbase.lan
+
+Rule     : Failed NTLM Logins with Different Accounts from Single Source System
+Severity : medium
+Hits     : 3
+Events:
+  [2018-07-11T05:42:11.176833+00:00] EventID=? Computer=?
+  [2018-08-24T18:15:47.755391+00:00] EventID=? Computer=?
+  [2018-08-24T18:27:20.317539+00:00] EventID=? Computer=?
+
+Rule     : PowerShell Deleted Mounted Share
+Severity : medium
+Hits     : 3
+Events:
+  [2018-08-15T16:40:20.999402+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  [2018-08-15T16:40:20.999415+00:00] EventID=4104 Computer=base-rd-02.shieldbase.lan
+  [2018-08-15T16:40:21.221010+00:00] EventID=4104 Computer=base-rd-01.shieldbase.lan
+
+Rule     : Security Audit Logs Cleared
+Severity : critical
+Hits     : 2
+Events:
+  [2018-05-04T22:14:29.130575+00:00] EventID=1102 Computer=win10-test
+  [2018-05-04T22:14:29.130575+00:00] EventID=1102 Computer=win10-test
+
+Rule     : User Added to Global Group
+Severity : info
+Hits     : 2
+Events:
+  [2018-05-07T19:24:55.953936+00:00] EventID=4728 Computer=MICROSO-RJNOKU1
+  [2018-05-07T19:24:59.031586+00:00] EventID=4728 Computer=MICROSO-F9QCQ4I
+
+Rule     : A Member Was Added to a Security-Enabled Global Group
+Severity : low
+Hits     : 2
+Events:
+  [2018-05-07T19:24:55.953936+00:00] EventID=4728 Computer=MICROSO-RJNOKU1
+  [2018-05-07T19:24:59.031586+00:00] EventID=4728 Computer=MICROSO-F9QCQ4I
+
+Rule     : New User Created
+Severity : info
+Hits     : 2
+Events:
+  [2018-05-07T19:24:55.954146+00:00] EventID=4720 Computer=MICROSO-RJNOKU1
+  [2018-05-07T19:24:59.031803+00:00] EventID=4720 Computer=MICROSO-F9QCQ4I
+
+Rule     : Local User Creation
+Severity : low
+Hits     : 2
+Events:
+  [2018-05-07T19:24:55.954146+00:00] EventID=4720 Computer=MICROSO-RJNOKU1
+  [2018-05-07T19:24:59.031803+00:00] EventID=4720 Computer=MICROSO-F9QCQ4I
+
+Rule     : A Member Was Removed From a Security-Enabled Global Group
+Severity : low
+Hits     : 2
+Events:
+  [2018-05-08T14:37:20.288879+00:00] EventID=4729 Computer=base-rd-01.shieldbase.lan
+  [2018-05-08T14:41:58.993863+00:00] EventID=4729 Computer=base-rd-02.shieldbase.lan
+
+Rule     : Password Spraying via Explicit Credentials
+Severity : medium
+Hits     : 2
+Events:
+  [2018-08-28T21:57:46.355650+00:00] EventID=? Computer=?
+  [2018-08-30T21:29:28.213355+00:00] EventID=? Computer=?
+
+Rule     : Crash Dump Created By Operating System
+Severity : medium
+Hits     : 1
+Events:
+  [2018-05-08T22:04:14.912796+00:00] EventID=1001 Computer=base-rd-02.shieldbase.lan
+
+Rule     : Invalid Users Failing To Authenticate From Single Source Using NTLM
+Severity : medium
+Hits     : 1
+Events:
+  [2018-07-11T05:42:11.176833+00:00] EventID=? Computer=?
+
+Rule     : Successful Overpass the Hash Attempt
+Severity : high
+Hits     : 1
+Events:
+  [2018-08-30T22:45:25.943649+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+
+Rule     : Pass the Hash Activity 2
+Severity : medium
+Hits     : 1
+Events:
+  [2018-08-30T22:45:25.943649+00:00] EventID=4624 Computer=base-rd-01.shieldbase.lan
+
+Rule     : PowerShell Script Service Installation
+Severity : critical
+Hits     : 1
+Events:
+  [2018-08-31T00:09:43.060437+00:00] EventID=7045 Computer=base-rd-02.shieldbase.lan
+
+Rule     : Suspicious Commands Service Installation
+Severity : medium
+Hits     : 1
+Events:
+  [2018-08-31T00:09:43.060437+00:00] EventID=7045 Computer=base-rd-02.shieldbase.lan
+
+Rule     : PowerShell Scripts Installed as Services
+Severity : high
+Hits     : 1
+Events:
+  [2018-08-31T00:09:43.060437+00:00] EventID=7045 Computer=base-rd-02.shieldbase.lan
+
+Rule     : Uncommon Service Installation Image Path
+Severity : medium
+Hits     : 1
+Events:
+  [2018-08-31T00:09:43.060437+00:00] EventID=7045 Computer=base-rd-02.shieldbase.lan
+
+Rule     : PowerShell Scripts Installed as Services - Security
+Severity : high
+Hits     : 1
+Events:
+  [2018-08-31T00:09:43.075651+00:00] EventID=4697 Computer=base-rd-02.shieldbase.lan
+
+========================================================================
+END OF REPORT
+========================================================================
