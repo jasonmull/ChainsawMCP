@@ -160,6 +160,7 @@ def _download_prebuilt_chainsaw(chainsaw_dir: Path) -> None:
 
     chainsaw_dir.mkdir(parents=True, exist_ok=True)
 
+    base = chainsaw_dir.resolve()
     with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
         for member in tar.getmembers():
             parts = Path(member.name).parts
@@ -167,6 +168,16 @@ def _download_prebuilt_chainsaw(chainsaw_dir: Path) -> None:
                 continue
             rel = Path(*parts[1:])  # strip leading "chainsaw/" directory component
             dest = chainsaw_dir / rel
+            # Refuse any member that resolves outside the install dir (path traversal),
+            # and skip anything that is not a plain file or directory (symlinks, devices).
+            try:
+                resolved = dest.resolve()
+            except OSError:
+                continue
+            if resolved != base and base not in resolved.parents:
+                raise RuntimeError(
+                    f"Refusing to extract archive member outside install dir: {member.name}"
+                )
             if member.isdir():
                 dest.mkdir(parents=True, exist_ok=True)
             elif member.isfile():
@@ -176,6 +187,8 @@ def _download_prebuilt_chainsaw(chainsaw_dir: Path) -> None:
                     dest.write_bytes(f.read())
                 if rel.parts[-1] == "chainsaw":
                     dest.chmod(dest.stat().st_mode | 0o111)
+            else:
+                continue
 
     # Clone rules/ from the repo — not included in the platform tarball.
     rules_dest = chainsaw_dir / "rules"

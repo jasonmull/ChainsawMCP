@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -138,6 +139,20 @@ def parse_output_file(path: Path) -> list[dict[str, Any]]:
     return _parse_output_file(path)
 
 
+def _write_runner_payload(job_id: str, payload: "list | dict") -> None:
+    """Persist the runner payload to <job_dir>/runner_payload.json with owner-only
+    permissions, so evidence paths and arguments are not exposed in the process
+    list (as they would be if passed on the monitor's command line)."""
+    from .config import get_jobs_dir
+
+    jdir = get_jobs_dir() / job_id
+    jdir.mkdir(parents=True, exist_ok=True)
+    pfile = jdir / "runner_payload.json"
+    fd = os.open(str(pfile), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh)
+
+
 def spawn_hunt_detached(
     evtx_dir: Path,
     job_id: str,
@@ -171,11 +186,8 @@ def spawn_hunt_detached(
         else {"start_new_session": True}
     )
 
-    runner_cmd = [
-        sys.executable, "-m", "chainsawmcp.monitor",
-        job_id,
-        json.dumps(cmd),
-    ]
+    _write_runner_payload(job_id, cmd)
+    runner_cmd = [sys.executable, "-m", "chainsawmcp.monitor", job_id]
 
     runner = subprocess.Popen(
         runner_cmd,
@@ -194,8 +206,9 @@ def spawn_detached_config(job_id: str, config: dict) -> int:
         if sys.platform == "win32"
         else {"start_new_session": True}
     )
+    _write_runner_payload(job_id, config)
     runner = subprocess.Popen(
-        [sys.executable, "-m", "chainsawmcp.monitor", job_id, json.dumps(config)],
+        [sys.executable, "-m", "chainsawmcp.monitor", job_id],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -230,8 +243,9 @@ def spawn_detached_from_evidence(
         else {"start_new_session": True}
     )
 
+    _write_runner_payload(job_id, config)
     runner = subprocess.Popen(
-        [sys.executable, "-m", "chainsawmcp.monitor", job_id, json.dumps(config)],
+        [sys.executable, "-m", "chainsawmcp.monitor", job_id],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

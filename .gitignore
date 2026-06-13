@@ -8,3 +8,8 @@ build/
 *.egg
 .pytest_cache/
 .claude/
+
+# Generated case artifacts (Protocol SIFT output dirs, relative to the case root)
+reports/
+exports/
+analysis/*/

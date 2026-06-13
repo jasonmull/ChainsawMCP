@@ -92,6 +92,29 @@ def _count_hits(job_id: str) -> tuple[int, int]:
     return len(hits), len(rules)
 
 
+def _validated_webhook_url(job_id: str) -> "str | None":
+    """Return CHAINSAWMCP_WEBHOOK_URL only if it is an https:// URL.
+
+    Webhook payloads include hunt summaries (case data), so plaintext http://
+    targets are rejected. A rejected value is logged to the job dir since the
+    detached runner has no other channel to surface the warning.
+    """
+    url = os.environ.get("CHAINSAWMCP_WEBHOOK_URL")
+    if not url:
+        return None
+    if url.lower().startswith("https://"):
+        return url
+    try:
+        (_job_dir(job_id) / "webhook_error.log").write_text(
+            f"CHAINSAWMCP_WEBHOOK_URL is set but is not https:// — webhook NOT sent.\n"
+            f"URL: {url}\nWebhook payloads contain case data and are only sent over HTTPS.\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+    return None
+
+
 def _post_webhook(url: str, payload: dict) -> None:
     status = payload.get("status", "unknown")
     job_id = payload.get("job_id", "?")
@@ -148,12 +171,18 @@ def _chainsaw_version(binary: str) -> str:
 
 def _write_provenance(job_id: str, cmd: list[str], results_file: Path, completed_at: str) -> None:
     """Write chainsaw_provenance.json to the job directory for chain-of-custody."""
+    binary_path = Path(cmd[0])
+    try:
+        binary_sha = _sha256(binary_path) if binary_path.is_file() else "unknown"
+    except OSError:
+        binary_sha = "unknown"
     provenance = {
         "command": cmd,
         "output_file": str(results_file),
         "output_sha256": _sha256(results_file),
         "completed_at": completed_at,
         "chainsaw_version": _chainsaw_version(cmd[0]),
+        "chainsaw_binary_sha256": binary_sha,
     }
     prov_file = results_file.parent / "chainsaw_provenance.json"
     try:
@@ -197,7 +226,7 @@ def _fail_job(job_id: str, error: str, exit_code: int | None = None, stderr: str
         "rules_triggered": 0,
     })
     _write_job(job_id, data)
-    webhook_url = os.environ.get("CHAINSAWMCP_WEBHOOK_URL")
+    webhook_url = _validated_webhook_url(job_id)
     if webhook_url:
         _post_webhook(webhook_url, {
             "job_id": job_id, "status": "error", "hit_count": 0,
@@ -241,15 +270,23 @@ def _build_chainsaw_cmd(evtx_root: Path, config: dict) -> "list[str] | None":
 
 
 def main() -> None:
-    if len(sys.argv) < 3:
-        print("Usage: python -m chainsawmcp.monitor <job_id> <payload_json>", file=sys.stderr)
+    if len(sys.argv) < 2:
+        print("Usage: python -m chainsawmcp.monitor <job_id> [payload_json]", file=sys.stderr)
         sys.exit(1)
 
     job_id = sys.argv[1]
+
+    # Payload is read from <job_dir>/runner_payload.json (written with 0600 perms
+    # by the spawning process). A literal payload as argv[2] is still accepted for
+    # backward compatibility and ad-hoc invocation.
     try:
-        payload = json.loads(sys.argv[2])
-    except (json.JSONDecodeError, IndexError) as e:
-        print(f"Invalid payload JSON: {e}", file=sys.stderr)
+        if len(sys.argv) >= 3:
+            payload = json.loads(sys.argv[2])
+        else:
+            payload_file = _job_dir(job_id) / "runner_payload.json"
+            payload = json.loads(payload_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, IndexError) as e:
+        print(f"Invalid or missing runner payload: {e}", file=sys.stderr)
         sys.exit(1)
 
     jdir = _job_dir(job_id)
@@ -369,7 +406,7 @@ def main() -> None:
     })
     _write_job(job_id, data)
 
-    webhook_url = os.environ.get("CHAINSAWMCP_WEBHOOK_URL")
+    webhook_url = _validated_webhook_url(job_id)
     if webhook_url:
         webhook_payload = {
             "job_id": job_id, "status": status,
