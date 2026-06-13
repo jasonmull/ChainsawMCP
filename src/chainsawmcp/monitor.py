@@ -15,6 +15,7 @@ recursively. No temp dirs or cleanup needed.
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -169,8 +170,79 @@ def _chainsaw_version(binary: str) -> str:
         return "unknown"
 
 
-def _write_provenance(job_id: str, cmd: list[str], results_file: Path, completed_at: str) -> None:
-    """Write chainsaw_provenance.json to the job directory for chain-of-custody."""
+def _event_block(rec: dict) -> dict:
+    """Return the Event block, handling document.data.Event and document.Event.
+
+    Mirrors report._get_event so annotation and reporting agree on structure.
+    """
+    doc = rec.get("document") or {}
+    if not isinstance(doc, dict):
+        return {}
+    inner = doc.get("data", doc)
+    if not isinstance(inner, dict):
+        return {}
+    ev = inner.get("Event", doc.get("Event", {}))
+    return ev if isinstance(ev, dict) else {}
+
+
+def _extract_record_id(system: dict) -> "str | None":
+    """Extract System.EventRecordID defensively (int, str, or dict variants)."""
+    rid = system.get("EventRecordID")
+    if isinstance(rid, dict):
+        rid = rid.get("#text") or rid.get("@text")
+    return str(rid) if rid not in (None, "") else None
+
+
+def _annotate_results(results_file: Path, job_id: str) -> None:
+    """Stamp a stable unique hit_id (plus forensic-dereference fields) into each
+    record in hunt_results.json, rewriting the file in place.
+
+    Called after the raw snapshot is taken but before the provenance hash, so the
+    hash covers the annotated file. IDs follow Chainsaw's output order
+    (``<job_id>-<index>``), so the same hunt output always yields the same IDs.
+    The pristine bytes live in hunt_results.raw.json. Best-effort: on any error
+    the working file is left unannotated rather than failing a completed hunt.
+    """
+    from . import chainsaw
+
+    try:
+        records = chainsaw.parse_output_file(results_file)
+    except Exception:
+        return
+    if not records:
+        return
+
+    for index, rec in enumerate(records):
+        if not isinstance(rec, dict):
+            continue
+        document = rec.get("document") if isinstance(rec.get("document"), dict) else {}
+        system = _event_block(rec).get("System", {})
+        if not isinstance(system, dict):
+            system = {}
+        rec["hit_id"] = f"{job_id}-{index:06d}"
+        rec["event_record_id"] = _extract_record_id(system)
+        rec["source"] = document.get("path")
+        rec["channel"] = system.get("Channel")
+
+    try:
+        results_file.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _write_provenance(
+    job_id: str,
+    cmd: list[str],
+    results_file: Path,
+    raw_file: Path,
+    completed_at: str,
+) -> None:
+    """Write chainsaw_provenance.json to the job directory for chain-of-custody.
+
+    Records hashes of both the annotated working copy (output_*) and the pristine
+    Chainsaw output (raw_output_*), and declares the annotation so the working
+    file is a documented, reproducible derivation rather than a silent edit.
+    """
     binary_path = Path(cmd[0])
     try:
         binary_sha = _sha256(binary_path) if binary_path.is_file() else "unknown"
@@ -183,7 +255,15 @@ def _write_provenance(job_id: str, cmd: list[str], results_file: Path, completed
         "completed_at": completed_at,
         "chainsaw_version": _chainsaw_version(cmd[0]),
         "chainsaw_binary_sha256": binary_sha,
+        "annotated_by": "chainsawmcp",
+        "id_scheme": "job_id-index + intrinsic(event_record_id,source,channel)",
     }
+    if raw_file.exists():
+        try:
+            provenance["raw_output_file"] = str(raw_file)
+            provenance["raw_output_sha256"] = _sha256(raw_file)
+        except OSError:
+            pass
     prov_file = results_file.parent / "chainsaw_provenance.json"
     try:
         prov_file.write_text(json.dumps(provenance, indent=2), encoding="utf-8")
@@ -376,12 +456,22 @@ def main() -> None:
             error_detail = f"Chainsaw exited with code {returncode}"
 
     if not error_detail and results_file.exists() and results_file.stat().st_size > 0:
+        # Snapshot Chainsaw's verbatim output before annotating, so the pristine
+        # bytes are preserved for chain-of-custody, then stamp unique hit_ids into
+        # the working copy. Both are hashed in provenance. Snapshot/annotate are
+        # best-effort — never fail a completed hunt over archival or ID stamping.
+        raw_file = results_file.parent / "hunt_results.raw.json"
+        try:
+            shutil.copy2(results_file, raw_file)
+        except OSError:
+            pass
+        _annotate_results(results_file, job_id)
         hit_count, rules_triggered = _count_hits(job_id)
         status = "complete"
         error = None
         exit_code_final = returncode
         suggested_fix = None
-        _write_provenance(job_id, cmd, results_file, completed_at)
+        _write_provenance(job_id, cmd, results_file, raw_file, completed_at)
     else:
         hit_count, rules_triggered = 0, 0
         status = "error"

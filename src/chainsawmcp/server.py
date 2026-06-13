@@ -31,6 +31,7 @@ class _SessionState:
     """Module-level session state for a single analysis session."""
     evidence: PreparedEvidence | None = None
     hits: list[dict] = []
+    job_id: str = ""
     output_file: str = ""
     report_file: str = ""
     evidence_path: str = ""
@@ -330,7 +331,14 @@ async def load_hunt_results(job_id: str = "") -> str:
         raise ValueError(f"Results file for job {job_id} is empty or missing: {rpath}")
 
     hits = load_job_results(job_id)
+    # Legacy fallback: result files written before hit_id injection lack the field.
+    # Stamp in memory using the same job_id-index scheme so every detection a
+    # client cites can be resolved via get_hit.
+    for index, h in enumerate(hits):
+        if isinstance(h, dict) and not h.get("hit_id"):
+            h["hit_id"] = f"{job_id}-{index:06d}"
     state.hits = hits
+    state.job_id = job_id
     state.output_file = str(rpath)
     state.hunt_status = "done"
     state.hunt_started_at = None
@@ -359,8 +367,13 @@ async def load_hunt_results(job_id: str = "") -> str:
                 f"  Command  : {' '.join(prov.get('command', []))}\n"
                 f"  Output   : {prov.get('output_file')}\n"
                 f"  SHA-256  : {prov.get('output_sha256')}\n"
-                f"  Chainsaw : {prov.get('chainsaw_version')}\n"
             )
+            if prov.get("raw_output_sha256"):
+                provenance_lines += (
+                    f"  Raw out  : {prov.get('raw_output_file')}\n"
+                    f"  Raw SHA  : {prov.get('raw_output_sha256')}  (pristine Chainsaw output)\n"
+                )
+            provenance_lines += f"  Chainsaw : {prov.get('chainsaw_version')}\n"
         except Exception:
             pass
 
@@ -456,6 +469,62 @@ async def get_detections(
         rule=rule or None,
         severity=severity or None,
         limit=limit,
+    )
+
+
+@mcp.tool()
+async def get_hit(hit_ids: list[str]) -> str:
+    """Resolve hit_id citations to their full raw Chainsaw records — the citation verifier.
+
+    Given one or more hit_id values (as shown by get_detections, e.g. "job-000123"),
+    return the exact underlying records: rule, raw Event block, EventRecordID, and
+    source EVTX file, plus the provenance SHA-256 anchoring them to the hash-verified
+    hunt output. Use this to confirm any claim made during analysis traces to a real
+    detection. A hit_id that does not resolve is, by definition, an unsupported claim.
+
+    Resolve at most 20 ids per call to stay within token budget.
+    """
+    import json as _json
+
+    if state.hunt_status != "done":
+        raise ValueError("No completed hunt results. Call load_hunt_results first.")
+
+    requested = [str(r).strip() for r in (hit_ids or []) if str(r).strip()]
+    if not requested:
+        raise ValueError("Provide at least one hit_id to resolve.")
+    max_ids = 20
+    if len(requested) > max_ids:
+        raise ValueError(
+            f"Too many hit_ids ({len(requested)}); resolve at most {max_ids} per call."
+        )
+
+    index = {
+        h.get("hit_id"): h
+        for h in state.hits
+        if isinstance(h, dict) and h.get("hit_id")
+    }
+    resolved: list[dict] = []
+    unresolved: list[str] = []
+    for rid in requested:
+        hit = index.get(rid)
+        (resolved.append(hit) if hit is not None else unresolved.append(rid))
+
+    # Provenance anchor: proves the resolved records belong to the hash-verified output.
+    output_sha256 = None
+    if state.job_id:
+        prov_path = results_path(state.job_id).parent / "chainsaw_provenance.json"
+        if prov_path.exists():
+            try:
+                output_sha256 = _json.loads(
+                    prov_path.read_text(encoding="utf-8")
+                ).get("output_sha256")
+            except Exception:
+                pass
+
+    return _json.dumps(
+        {"resolved": resolved, "unresolved": unresolved, "output_sha256": output_sha256},
+        indent=2,
+        default=str,
     )
 
 
