@@ -84,6 +84,7 @@ Automatic report generation was considered and rejected. A one-shot report canno
 - **Fault-tolerant hunting** — `--skip-errors` is always enabled; a single corrupt log file does not abort the hunt
 - **Webhook notifications** — optional; Discord, Slack, and generic HTTP receivers supported; not required when polling via `load_hunt_results()`
 - **Chain-of-custody provenance** — every hunt writes `chainsaw_provenance.json` with the exact command, Chainsaw version, and SHA-256 of results
+- **Per-hit citations** — every detection carries a unique `hit_id`; `get_hit` resolves it back to the hash-verified record, so findings are traceable rather than trusted (see [`docs/ACCURACY.md`](docs/ACCURACY.md))
 - **Local LLM support** _(in development)_ — designed to work with OpenWebUI, Ollama, and any MCP-compatible client; sensitive evidence never has to leave your network
 - **No server-side LLM calls** — the server is purely operational; all reasoning is provided by the client
 
@@ -283,7 +284,7 @@ Write the full hunt report to disk and return a structured summary including sev
 
 ### 5. `get_detections`
 
-Return individual events from the completed hunt, filtered by rule name or severity. Use this to drill into specific detections surfaced by `chainsaw_report`.
+Return individual events from the completed hunt, filtered by rule name or severity. Use this to drill into specific detections surfaced by `chainsaw_report`. Each detection carries a unique `hit_id` (shown as `ref=<id>`) — the citation handle for `get_hit`.
 
 | Argument | Type | Description |
 |---|---|---|
@@ -296,7 +297,17 @@ Return individual events from the completed hunt, filtered by rule name or sever
 
 ---
 
-### 6. `setup_environment`
+### 6. `get_hit`
+
+Resolve one or more `hit_id` citations back to their full raw Chainsaw records — the citation verifier. Each record in `hunt_results.json` is stamped with a unique, deterministic `hit_id` (`<job_id>-<index>`) plus intrinsic dereference fields (`event_record_id`, `source` EVTX, `channel`) before the provenance hash is taken, so a cited finding can be confirmed against the hash-verified hunt output. A `hit_id` that does not resolve is, by definition, an unsupported claim. See [`docs/ACCURACY.md`](docs/ACCURACY.md) for the full chain-of-custody rationale.
+
+| Argument | Type | Description |
+|---|---|---|
+| `hit_ids` | list of strings, **required** | The `hit_id` values to resolve (max 20 per call). Returns the matching records, any unresolved ids, and the provenance `output_sha256`. |
+
+---
+
+### 7. `setup_environment`
 
 Install Chainsaw and Sigma rules. Installs to `/opt/chainsaw/` and `/opt/sigma/` by default — no sudo required if those paths are writable. If they are not, the tool returns the exact shell commands to run manually rather than escalating privileges silently. Resolved paths are saved to `~/.chainsawmcp/config.json` so `start_hunt` picks them up automatically with no explicit path arguments.
 
@@ -468,6 +479,14 @@ pytest
 ```
 
 The test suite mocks all subprocess calls — no Chainsaw binary or evidence files required.
+
+---
+
+## Documentation
+
+- [`docs/ACCURACY.md`](docs/ACCURACY.md) — accuracy & evidence-integrity self-assessment: false positives, missed-artifact classes, hallucination handling, and how the citation/provenance chain makes findings verifiable
+- [`docs/ADR-combined.md`](docs/ADR-combined.md) — architecture decision records
+- [`docs/session-log-combined.md`](docs/session-log-combined.md) — development session log
 
 ---
 

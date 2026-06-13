@@ -175,11 +175,14 @@ def _hit_to_dict(hit: dict[str, Any]) -> dict[str, Any]:
         eid = eid.get("#text") or eid.get("@text") or str(eid)
 
     return {
+        "hit_id": hit.get("hit_id"),
         "rule": _rule_name(hit),
         "severity": _extract_severity(hit),
         "timestamp": ts,
         "event_id": str(eid) if eid else None,
+        "event_record_id": hit.get("event_record_id"),
         "computer": system.get("Computer"),
+        "source": hit.get("source"),
         "data": _get_event_data(hit),
     }
 
@@ -219,7 +222,9 @@ def get_detections(
         "",
     ]
     for hit in shown:
-        lines.append(f"  [{_extract_severity(hit)}]  {_rule_name(hit)}")
+        ref = hit.get("hit_id")
+        ref_suffix = f"  (ref={ref})" if ref else ""
+        lines.append(f"  [{_extract_severity(hit)}]  {_rule_name(hit)}{ref_suffix}")
         lines.append(f"    {_format_hit(hit)}")
         event_data = _format_event_data(hit)
         if event_data:

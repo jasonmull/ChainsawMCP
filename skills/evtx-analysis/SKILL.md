@@ -78,6 +78,25 @@ call: get_detections(output_format="json", page=1, page_size=25)
 - Filter by severity (`critical`, `high`, `medium`, `low`) or rule name (substring match)
 - Use `output_format="json"` with pagination when feeding results to downstream tools
 - Use `output_format="text"` (default) for conversational analysis with the analyst
+- Every detection carries a `hit_id` (shown as `ref=<id>`) — record it; it is the citation handle for Step 5
+
+### Step 5 — Cite every finding (mandatory)
+
+```
+call: get_hit(hit_ids=["<job>-000123", "<job>-000456"])
+```
+
+**Citation requirement:** every factual claim you state to the analyst — every host, account, IP,
+command line, or timeline entry — MUST cite the `hit_id`(s) it rests on. The IDs come from
+`get_detections`; `get_hit` resolves them back to the exact hash-verified Chainsaw record (raw Event
+block, EventRecordID, source EVTX) plus the provenance SHA-256.
+
+- If a claim cannot be tied to a `hit_id`, it is unsupported — **withdraw it.** Do not infer events
+  that Chainsaw did not detect.
+- Before emitting the completion promise, self-check: resolve your cited IDs with `get_hit`. Any ID
+  in the `unresolved` list means you cited something that does not exist — correct the finding.
+- This is the hallucination backstop: detections come only from Chainsaw (the server makes no LLM
+  calls), and `get_hit` makes that traceability mechanically verifiable rather than a matter of trust.
 
 ---
 

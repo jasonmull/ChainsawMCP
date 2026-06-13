@@ -23,12 +23,15 @@ from chainsawmcp.report import (
     format_full_report,
     format_summary,
     get_detections,
+    get_detections_json,
     _group_by_rule,
     _extract_severity,
     _format_hit,
     _format_event_data,
     _get_event_data,
+    _hit_to_dict,
 )
+from chainsawmcp.monitor import _annotate_results, _extract_record_id, _event_block
 
 
 # ---------------------------------------------------------------------------
@@ -463,10 +466,13 @@ _RDP_HIT = {
     "level": "critical",
     "timestamp": "2018-08-31T12:34:56.000Z",
     "document": {
+        "path": "C:/Windows/System32/winevt/Logs/Security.evtx",
         "data": {
             "Event": {
                 "System": {
                     "EventID": 4624,
+                    "EventRecordID": 6677,
+                    "Channel": "Security",
                     "Computer": "DC01.corp.local",
                     "TimeCreated": {"SystemTime": "2018-08-31T12:34:56.000Z"},
                 },
@@ -598,3 +604,117 @@ def test_run_hunt_success(tmp_path):
     assert isinstance(result, HuntResult)
     assert result.hits == hits
     assert result.output_file is not None
+
+
+# ---------------------------------------------------------------------------
+# Hit ID injection (chain-of-custody citations)
+# ---------------------------------------------------------------------------
+
+def _write_results(tmp_path: Path, records: list) -> Path:
+    rf = tmp_path / "hunt_results.json"
+    rf.write_text(json.dumps(records), encoding="utf-8")
+    return rf
+
+
+def test_annotate_results_stamps_unique_ids(tmp_path):
+    records = [dict(_RDP_HIT), dict(_RDP_HIT), dict(_RDP_HIT)]
+    rf = _write_results(tmp_path, records)
+
+    _annotate_results(rf, "job42")
+
+    out = json.loads(rf.read_text(encoding="utf-8"))
+    ids = [r["hit_id"] for r in out]
+    assert ids == ["job42-000000", "job42-000001", "job42-000002"]
+    assert len(set(ids)) == len(ids)  # unique
+
+
+def test_annotate_results_stamps_intrinsic_fields(tmp_path):
+    rf = _write_results(tmp_path, [dict(_RDP_HIT)])
+
+    _annotate_results(rf, "job42")
+
+    rec = json.loads(rf.read_text(encoding="utf-8"))[0]
+    assert rec["event_record_id"] == "6677"
+    assert rec["source"] == "C:/Windows/System32/winevt/Logs/Security.evtx"
+    assert rec["channel"] == "Security"
+
+
+def test_annotate_results_is_deterministic(tmp_path):
+    # Same input + same job_id must always produce the same IDs.
+    rf1 = tmp_path / "first.json"
+    rf1.write_text(json.dumps([dict(_RDP_HIT), dict(_RDP_HIT)]), encoding="utf-8")
+    _annotate_results(rf1, "job42")
+
+    rf2 = tmp_path / "again.json"
+    rf2.write_text(json.dumps([dict(_RDP_HIT), dict(_RDP_HIT)]), encoding="utf-8")
+    _annotate_results(rf2, "job42")
+
+    ids1 = [r["hit_id"] for r in json.loads(rf1.read_text(encoding="utf-8"))]
+    ids2 = [r["hit_id"] for r in json.loads(rf2.read_text(encoding="utf-8"))]
+    assert ids1 == ids2
+
+
+def test_annotate_results_rewrites_valid_json(tmp_path):
+    rf = _write_results(tmp_path, [dict(_RDP_HIT)])
+    _annotate_results(rf, "job42")
+    # Must remain parseable by Chainsaw's own parser.
+    assert _parse_output(rf.read_text(encoding="utf-8"))[0]["hit_id"] == "job42-000000"
+
+
+def test_annotate_results_empty_file_is_noop(tmp_path):
+    rf = tmp_path / "hunt_results.json"
+    rf.write_text("[]", encoding="utf-8")
+    _annotate_results(rf, "job42")  # must not raise
+    assert json.loads(rf.read_text(encoding="utf-8")) == []
+
+
+def test_extract_record_id_defensive():
+    assert _extract_record_id({"EventRecordID": 42}) == "42"
+    assert _extract_record_id({"EventRecordID": "42"}) == "42"
+    assert _extract_record_id({"EventRecordID": {"#text": "42"}}) == "42"
+    assert _extract_record_id({"EventRecordID": {"@text": "42"}}) == "42"
+    assert _extract_record_id({}) is None
+    assert _extract_record_id({"EventRecordID": ""}) is None
+
+
+def test_event_block_handles_both_shapes():
+    # document.data.Event
+    assert _event_block(_RDP_HIT)["System"]["EventID"] == 4624
+    # document.Event (alternate)
+    alt = {"document": {"Event": {"System": {"EventID": 1}}}}
+    assert _event_block(alt)["System"]["EventID"] == 1
+    # missing document
+    assert _event_block({}) == {}
+
+
+def test_hit_to_dict_surfaces_ids():
+    annotated = dict(_RDP_HIT)
+    annotated.update({
+        "hit_id": "job42-000007",
+        "event_record_id": "6677",
+        "source": "C:/Windows/System32/winevt/Logs/Security.evtx",
+    })
+    d = _hit_to_dict(annotated)
+    assert d["hit_id"] == "job42-000007"
+    assert d["event_record_id"] == "6677"
+    assert d["source"].endswith("Security.evtx")
+
+
+def test_hit_to_dict_legacy_without_ids():
+    d = _hit_to_dict(dict(_RDP_HIT))  # no hit_id injected
+    assert d["hit_id"] is None
+    assert d["rule"] == "Remote Interactive Logon"
+
+
+def test_get_detections_shows_ref():
+    annotated = dict(_RDP_HIT)
+    annotated["hit_id"] = "job42-000007"
+    result = get_detections([annotated])
+    assert "ref=job42-000007" in result
+
+
+def test_get_detections_json_includes_hit_id():
+    annotated = dict(_RDP_HIT)
+    annotated["hit_id"] = "job42-000007"
+    out = get_detections_json([annotated])
+    assert out["hits"][0]["hit_id"] == "job42-000007"
