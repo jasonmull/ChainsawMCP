@@ -171,11 +171,22 @@ async def start_hunt(
 
     if evtx_count is None:
         # E01 hunt — evidence prep + Chainsaw run both happen in the detached monitor.
-        # Tell Claude to watch the job file actively rather than waiting for user input.
+        # Provide an exact Monitor command: silent while waiting, one line on completion.
+        # This ensures Monitor fires exactly once (not on every poll iteration).
+        job_json = str(jdir / "job.json")
+        monitor_cmd = (
+            "python3 -u -c \"import json,time,sys; "
+            f"f=r'{job_json}'; "
+            "[(None if (s:=json.load(open(f)).get('status','r')) not in ('complete','error') "
+            "else (print(s,flush=True),sys.exit())) or time.sleep(15) "
+            "for _ in iter(int,1)]\""
+        )
         instructions = (
             "IMPORTANT: Chainsaw is running as a fully independent background process — do NOT poll.\n"
-            f"Use the Monitor tool to watch {jdir / 'job.json'} until status is 'complete' or 'error'.\n"
-            "When done, call load_hunt_results() immediately — do not wait for the user to ask."
+            "Use the Monitor tool with this exact command "
+            "(no output while running; prints one line when complete or error, then exits):\n"
+            f"  {monitor_cmd}\n"
+            "When Monitor fires, call load_hunt_results() immediately — do not wait for the user to ask."
         )
     else:
         instructions = (
@@ -297,19 +308,29 @@ async def start_bulk_hunt(
     else:
         webhook_note = "No webhook configured — set CHAINSAWMCP_WEBHOOK_URL to receive a notification."
 
+    bulk_job_json = str(jdir / "job.json")
+    bulk_monitor_cmd = (
+        "python3 -u -c \"import json,time,sys; "
+        f"f=r'{bulk_job_json}'; "
+        "[(None if (s:=json.load(open(f)).get('status','r')) not in ('complete','error') "
+        "else (print(s,flush=True),sys.exit())) or time.sleep(15) "
+        "for _ in iter(int,1)]\""
+    )
     source_lines = "\n".join(f"    {p}" for p in valid_paths)
     lines = [
         f"Bulk hunt started (job ID: {job_id}).",
         f"  Sources ({len(valid_paths)}): \n{source_lines}",
         f"  Runner PID: {runner_pid}",
-        f"  Job state : {jdir / 'job.json'}",
+        f"  Job state : {bulk_job_json}",
         f"  Results will be written to: {jdir / 'hunt_results.json'}",
         f"  {webhook_note}",
         "",
         "All sources will be prepared and analyzed in a single Chainsaw run.",
         "IMPORTANT: This is a fully independent background process — do NOT poll.",
-        f"Use the Monitor tool to watch {jdir / 'job.json'} until status is 'complete' or 'error'.",
-        "When done, call load_hunt_results() immediately — do not wait for the user to ask.",
+        "Use the Monitor tool with this exact command "
+        "(no output while running; prints one line when complete or error, then exits):",
+        f"  {bulk_monitor_cmd}",
+        "When Monitor fires, call load_hunt_results() immediately — do not wait for the user to ask.",
     ]
     if errors:
         lines += ["", "Skipped (not found):"] + errors
