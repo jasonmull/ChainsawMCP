@@ -167,19 +167,35 @@ async def start_hunt(
 
     evtx_line = f"  EVTX files: {evtx_count}\n" if evtx_count is not None else ""
     staging_line = f"  EVTXs staging to: {jdir / 'evtx'}\n" if evtx_count is None else ""
+    job_state_line = f"  Job state : {jdir / 'job.json'}\n" if evtx_count is None else ""
+
+    if evtx_count is None:
+        # E01 hunt — evidence prep + Chainsaw run both happen in the detached monitor.
+        # Tell Claude to watch the job file actively rather than waiting for user input.
+        instructions = (
+            "IMPORTANT: Chainsaw is running as a fully independent background process — do NOT poll.\n"
+            f"Use the Monitor tool to watch {jdir / 'job.json'} until status is 'complete' or 'error'.\n"
+            "When done, call load_hunt_results() immediately — do not wait for the user to ask."
+        )
+    else:
+        instructions = (
+            "IMPORTANT: Chainsaw is now running as a fully independent background process.\n"
+            "Do NOT call hunt_status or load_hunt_results yet — the hunt is not done.\n"
+            "Tell the user the hunt is running and that they will be notified when it finishes.\n"
+            "When the webhook fires or the user returns to ask for results, call load_hunt_results()."
+        )
+
     return (
         f"Hunt started (job ID: {job_id}).\n"
         f"  Evidence : {path}\n"
         f"{evtx_line}"
         f"{staging_line}"
         f"  Runner PID: {runner_pid}\n"
+        f"{job_state_line}"
         f"  Results will be written to: {jdir / 'hunt_results.json'}\n"
         f"  Case directory: {_get_case_dir()}\n"
         f"  {webhook_note}\n\n"
-        "IMPORTANT: Chainsaw is now running as a fully independent background process.\n"
-        "Do NOT call hunt_status or load_hunt_results yet — the hunt is not done.\n"
-        "Tell the user the hunt is running and that they will be notified when it finishes.\n"
-        "When the webhook fires or the user returns to ask for results, call load_hunt_results()."
+        f"{instructions}"
     )
 
 
@@ -286,12 +302,14 @@ async def start_bulk_hunt(
         f"Bulk hunt started (job ID: {job_id}).",
         f"  Sources ({len(valid_paths)}): \n{source_lines}",
         f"  Runner PID: {runner_pid}",
+        f"  Job state : {jdir / 'job.json'}",
         f"  Results will be written to: {jdir / 'hunt_results.json'}",
         f"  {webhook_note}",
         "",
         "All sources will be prepared and analyzed in a single Chainsaw run.",
         "IMPORTANT: This is a fully independent background process — do NOT poll.",
-        "When the webhook fires, call load_hunt_results() to load the combined results.",
+        f"Use the Monitor tool to watch {jdir / 'job.json'} until status is 'complete' or 'error'.",
+        "When done, call load_hunt_results() immediately — do not wait for the user to ask.",
     ]
     if errors:
         lines += ["", "Skipped (not found):"] + errors
