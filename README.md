@@ -4,7 +4,7 @@
 
 ChainsawMCP is a [Model Context Protocol](https://modelcontextprotocol.io/) server that bridges [Chainsaw](https://github.com/WithSecureLabs/chainsaw) — WithSecure's fast Windows Event Log threat hunting tool — with AI assistants. It is built for incident responders who need to analyse large volumes of Windows event logs quickly, without an EDR or SIEM in place.
 
-Because the server makes no LLM calls of its own, it works equally well with **cloud models** (Claude Desktop) and **locally hosted models** (OpenWebUI + Ollama, or any MCP-compatible client) — keeping sensitive evidence off the internet if your engagement requires it.
+The server makes no LLM calls of its own. It runs Chainsaw, stages evidence, and returns results over MCP, with all reasoning supplied by the connected client. That separation means evidence locality is a property of which client you choose, not of the server: paired with a locally hosted model (OpenWebUI + Ollama, LM Studio, or any local MCP client), evidence stays on your network end to end; paired with a cloud client like Claude Desktop, the client transmits the detection records it analyzes to that provider, exactly as any MCP tool's output would be. Pick the client that matches your engagement's data-handling requirements.
 
 ---
 
@@ -51,7 +51,7 @@ Because the server makes no LLM calls of its own, it works equally well with **c
   └───────────────────┘
 ```
 
-The MCP server handles evidence preparation and Chainsaw execution. The AI client — Claude Desktop, OpenWebUI, or anything MCP-compatible — provides all the reasoning. The server makes no LLM calls.
+The MCP server handles evidence preparation and Chainsaw execution. The connected AI client — Claude Desktop, OpenWebUI, or anything MCP-compatible — provides all the reasoning, which means it is the client, not the server, that places evidence into a model's context. The server itself makes no LLM calls and opens no connection to any model.
 
 ---
 
@@ -85,8 +85,8 @@ Automatic report generation was considered and rejected. A one-shot report canno
 - **Webhook notifications** — optional; Discord, Slack, and generic HTTP receivers supported; not required when polling via `load_hunt_results()`
 - **Chain-of-custody provenance** — every hunt writes `chainsaw_provenance.json` with the exact command, Chainsaw version, and SHA-256 of results
 - **Per-hit citations** — every detection carries a unique `hit_id`; `get_hit` resolves it back to the hash-verified record, so findings are traceable rather than trusted (see [`docs/ACCURACY.md`](docs/ACCURACY.md))
-- **Local LLM support** _(in development)_ — designed to work with OpenWebUI, Ollama, and any MCP-compatible client; sensitive evidence never has to leave your network
-- **No server-side LLM calls** — the server is purely operational; all reasoning is provided by the client
+- **No server-side LLM calls** — the server is purely operational (mount, extract, hunt, report); all reasoning is provided by the connected client. The server never sends evidence to a model itself.
+- **Client-determined evidence locality** — because reasoning lives in the client, where your evidence goes is your choice: a local client (OpenWebUI + Ollama, LM Studio) keeps everything on-network; a cloud client sends the records it reasons over to that provider. Local-client integration is functional but still maturing (see Local LLM Integration below).
 
 ---
 
@@ -207,7 +207,7 @@ Add `CHAINSAWMCP_WEBHOOK_URL` if you want completion notifications:
 
 ### OpenWebUI / Local LLM Integration _(in development)_
 
-ChainsawMCP supports a `--transport streamable-http` mode for OpenWebUI integration, keeping all evidence on your local network:
+ChainsawMCP supports a `--transport streamable-http` mode for OpenWebUI integration. Because the server makes no model calls, pairing it with a locally hosted model keeps all evidence — and all analysis of that evidence — on your local network; nothing is transmitted off-host.
 
 ```bash
 CHAINSAWMCP_CASE_DIR=/cases/current-engagement \
