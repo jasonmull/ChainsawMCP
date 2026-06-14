@@ -191,11 +191,14 @@ async def start_bulk_hunt(
     mapping_path: str = "",
     extra_args: list[str] | None = None,
 ) -> str:
-    """Start Chainsaw hunts against multiple E01 images or EVTX directories in one call.
+    """Start a Chainsaw hunt against one or more E01 images or EVTX directories.
 
-    Spawns one independent background job per path and returns all job IDs immediately —
-    no MCP timeout possible. Each hunt fires a webhook when done.
-    Call load_hunt_results(job_id=...) for each job to load results for analysis.
+    For a single path, delegates to start_hunt's code path for identical behavior
+    and a clean evidence_path label in job.json.
+    For multiple paths, all sources are prepared and analyzed in one background job.
+    Returns immediately — Chainsaw runs as a fully detached process and cannot time out.
+    A webhook POST is sent to CHAINSAWMCP_WEBHOOK_URL when the hunt finishes.
+    Call load_hunt_results(job_id=...) to load results for analysis.
     """
     if not paths:
         raise ValueError("'paths' must be a non-empty list of evidence paths.")
@@ -218,22 +221,54 @@ async def start_bulk_hunt(
     mapping = Path(mapping_path) if mapping_path else None
     extra = extra_args or []
 
-    job_id = create_job(f"bulk:{','.join(valid_paths)}")
-    jdir = get_jobs_dir() / job_id
-    update_job(job_id, evidence_paths=valid_paths)
-
-    config: dict = {"evidence_paths": valid_paths}
-    if rules:
-        config["rules"] = str(rules)
-    if sigma:
-        config["sigma"] = str(sigma)
-    if mapping:
-        config["mapping"] = str(mapping)
-    if extra:
-        config["extra_args"] = extra
-
-    runner_pid = spawn_detached_config(job_id, config)
-    update_job(job_id, pid=runner_pid)
+    if len(valid_paths) == 1:
+        # Single source: delegate to start_hunt's code paths so job.json gets the
+        # actual path (not "bulk:...") and the monitor uses the same single-source flow.
+        p_single = Path(valid_paths[0])
+        job_id = create_job(valid_paths[0])
+        jdir = get_jobs_dir() / job_id
+        if p_single.is_dir():
+            evtx_files = list(p_single.rglob("*.evtx"))
+            if not evtx_files:
+                raise ValueError(f"No .evtx files found under {valid_paths[0]}")
+            try:
+                runner_pid = spawn_hunt_detached(
+                    p_single, job_id, jdir,
+                    rules_path=rules, sigma_path=sigma,
+                    mapping_path=mapping, extra_args=extra,
+                )
+            except ChainsawError as e:
+                update_job(job_id, status="error", error=str(e))
+                raise ValueError(str(e)) from e
+            update_job(job_id, pid=runner_pid, evtx_path=str(p_single))
+        else:
+            config: dict = {"evidence_path": valid_paths[0]}
+            if rules:
+                config["rules"] = str(rules)
+            if sigma:
+                config["sigma"] = str(sigma)
+            if mapping:
+                config["mapping"] = str(mapping)
+            if extra:
+                config["extra_args"] = extra
+            runner_pid = spawn_detached_config(job_id, config)
+            update_job(job_id, pid=runner_pid)
+    else:
+        # Multiple sources: one job covering all paths, monitor stages each in turn.
+        job_id = create_job(f"bulk:{','.join(valid_paths)}")
+        jdir = get_jobs_dir() / job_id
+        update_job(job_id, evidence_paths=valid_paths)
+        config = {"evidence_paths": valid_paths}
+        if rules:
+            config["rules"] = str(rules)
+        if sigma:
+            config["sigma"] = str(sigma)
+        if mapping:
+            config["mapping"] = str(mapping)
+        if extra:
+            config["extra_args"] = extra
+        runner_pid = spawn_detached_config(job_id, config)
+        update_job(job_id, pid=runner_pid)
 
     from .config import get_webhook_url, webhook_url_rejected
     if get_webhook_url():
