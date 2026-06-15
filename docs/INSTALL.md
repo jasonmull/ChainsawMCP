@@ -9,7 +9,7 @@ pip install -e .
 Navigate into your case directory first — this anchors all generated artifacts automatically:
 
 ```bash
-cd /cases/FINDEVL
+cd /cases/FINDEVIL
 claude mcp add ChainsawMCP -- python -m chainsawmcp.server
 ```
 
