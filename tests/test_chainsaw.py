@@ -718,3 +718,119 @@ def test_get_detections_json_includes_hit_id():
     annotated["hit_id"] = "job42-000007"
     out = get_detections_json([annotated])
     assert out["hits"][0]["hit_id"] == "job42-000007"
+
+
+# ---------------------------------------------------------------------------
+# Agent-to-tool execution log (audit)
+# ---------------------------------------------------------------------------
+
+import inspect
+
+from chainsawmcp import audit
+from chainsawmcp.audit import audited
+
+
+def _read_log(case_dir: Path) -> list[dict]:
+    path = case_dir / "analysis" / "agent_execution.jsonl"
+    lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    return [json.loads(ln) for ln in lines]
+
+
+async def test_audited_appends_valid_record(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+
+    @audited
+    async def sample_tool(path: str, limit: int = 5) -> str:
+        return "done: " + path
+
+    result = await sample_tool("/cases/x", limit=9)
+    assert result == "done: /cases/x"
+
+    records = _read_log(tmp_path)
+    assert len(records) == 1
+    rec = records[0]
+    for field in ("seq", "session_id", "tool", "args", "started_at",
+                  "finished_at", "duration_ms", "status", "result_chars",
+                  "result_preview"):
+        assert field in rec
+    assert rec["tool"] == "sample_tool"
+    assert rec["status"] == "ok"
+    assert rec["args"] == {"path": "/cases/x", "limit": 9}
+    assert rec["result_chars"] == len("done: /cases/x")
+    assert rec["result_preview"].startswith("done: ")
+    assert "error" not in rec
+
+
+async def test_audited_seq_increments_and_valid_jsonl(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+
+    @audited
+    async def t(n: int) -> str:
+        return str(n)
+
+    await t(1)
+    await t(2)
+    await t(3)
+
+    records = _read_log(tmp_path)
+    assert len(records) == 3
+    seqs = [r["seq"] for r in records]
+    assert seqs == sorted(seqs)
+    assert len(set(seqs)) == 3  # monotonic, no duplicates
+    # All share one session id.
+    assert len({r["session_id"] for r in records}) == 1
+
+
+async def test_audited_logs_error_and_reraises(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+
+    @audited
+    async def boom() -> str:
+        raise ValueError("kaboom")
+
+    with pytest.raises(ValueError, match="kaboom"):
+        await boom()
+
+    records = _read_log(tmp_path)
+    assert len(records) == 1
+    rec = records[0]
+    assert rec["status"] == "error"
+    assert rec["error"] == "ValueError: kaboom"
+    assert "result_preview" not in rec
+
+
+async def test_audited_survives_unwritable_log_dir(tmp_path, monkeypatch):
+    # Point case dir at a path whose 'analysis' is a file, so mkdir/open fail.
+    blocker = tmp_path / "analysis"
+    blocker.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+
+    @audited
+    async def still_works(x: str) -> str:
+        return x.upper()
+
+    # The tool must succeed even though logging cannot write.
+    assert await still_works("ok") == "OK"
+
+
+def test_audited_preserves_signature():
+    async def original(path: str, limit: int = 25, output_format: str = "text") -> str:
+        return ""
+
+    wrapped = audited(original)
+    assert inspect.signature(wrapped) == inspect.signature(original)
+    assert wrapped.__name__ == original.__name__
+
+
+async def test_audited_truncates_long_args(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+
+    @audited
+    async def t(blob: str) -> str:
+        return "ok"
+
+    long = "A" * 5000
+    await t(long)
+    rec = _read_log(tmp_path)[0]
+    assert len(rec["args"]["blob"]) < len(long)
+    assert rec["args"]["blob"].endswith("…")

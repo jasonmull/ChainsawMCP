@@ -455,6 +455,7 @@ Artifacts are written relative to `CHAINSAWMCP_CASE_DIR` (defaults to cwd — ty
 <case_dir>/
 ├── analysis/
 │   ├── forensic_audit.log        ← appended at end of each Claude session
+│   ├── agent_execution.jsonl     ← structured agent-to-tool execution log (one JSON line per MCP tool call)
 │   └── <job_id>/
 │       ├── job.json
 │       ├── hunt_results.json
