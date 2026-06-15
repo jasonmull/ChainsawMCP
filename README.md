@@ -16,8 +16,8 @@ The server makes no LLM calls of its own. It runs Chainsaw, stages evidence, and
           │
           ▼
   ┌───────────────────┐
-  │   start_hunt      │  ← returns in < 1 second
-  │   (job ID issued) │    spawns monitor as independent process
+  │   start_hunt      │  ← spawns monitor as independent process
+  │   (job ID issued) │    
   └───────────────────┘
           │
           ▼
