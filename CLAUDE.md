@@ -183,7 +183,7 @@ directory — `CHAINSAWMCP_CASE_DIR` defaults to `cwd`, so no explicit env var i
 standard workflow. All generated artifacts are written to subdirectories relative to this root.
 
 **Artifact Routing (relative to `CHAINSAWMCP_CASE_DIR`)**
-- `./analysis/`  — job state, raw Chainsaw output, EVTX staging, chainsaw_provenance.json, forensic_audit.log
+- `./analysis/`  — job state, raw Chainsaw output, EVTX staging, chainsaw_provenance.json, forensic_audit.log, agent_execution.jsonl
 - `./exports/`   — structured exports: CSVs, extracted registry keys, super-timelines
 - `./reports/`   — final hunt reports (`hunt_report.txt`) and forensic summaries
 

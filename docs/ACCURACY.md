@@ -36,6 +36,14 @@ first and hashes both files. The ID scheme is deterministic and recorded in
 provenance, so anyone can re-derive the annotated file from the raw one and
 confirm it matches. The annotation is a reproducible derivation, not an edit.
 
+The agent's activity is logged too. Every MCP tool call appends one structured
+JSON line to `analysis/agent_execution.jsonl` — the tool name, arguments, UTC
+start/finish timestamps, duration, status, and a short result preview — giving a
+timestamped, ordered record of the agent-to-tool execution sequence. Note that
+token usage is *not* recorded: the server makes zero LLM calls, so token counts
+exist only in the MCP client and are not visible to the server. The server logs
+what it actually observes — the tool-call sequence — and nothing it doesn't.
+
 ## What it can get wrong
 
 The server adds no detection logic, so it has no false positives of its own. The

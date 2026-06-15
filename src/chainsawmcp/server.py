@@ -7,6 +7,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from .audit import audited
 from .chainsaw import ChainsawError, HuntResult, run_hunt_async, spawn_detached_config, spawn_detached_from_evidence, spawn_hunt_detached
 from .config import get_case_dir, get_http_host, get_http_port, get_jobs_dir, get_output_dir, is_windows
 from .evidence import EvidenceError, PreparedEvidence
@@ -50,6 +51,7 @@ state = _SessionState()
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
+@audited
 async def prepare_evidence(path: str) -> str:
     """Mounts an E01 image and stages EVTXs synchronously.
 
@@ -95,6 +97,7 @@ async def prepare_evidence(path: str) -> str:
 
 
 @mcp.tool()
+@audited
 async def start_hunt(
     path: str,
     rules_path: str = "",
@@ -211,6 +214,7 @@ async def start_hunt(
 
 
 @mcp.tool()
+@audited
 async def start_bulk_hunt(
     paths: list[str],
     rules_path: str = "",
@@ -339,6 +343,7 @@ async def start_bulk_hunt(
 
 
 @mcp.tool()
+@audited
 async def load_hunt_results(job_id: str = "") -> str:
     """Load results from a completed detached hunt into the session for analysis.
 
@@ -472,6 +477,7 @@ async def load_hunt_results(job_id: str = "") -> str:
 
 
 @mcp.tool()
+@audited
 async def chainsaw_report(output_format: str = "text") -> str:
     """Write the full hunt report to disk and return a summary with severity breakdown
     and top detections. Call after load_hunt_results.
@@ -507,6 +513,7 @@ async def chainsaw_report(output_format: str = "text") -> str:
 
 
 @mcp.tool()
+@audited
 async def get_detections(
     rule: str = "",
     severity: str = "",
@@ -547,6 +554,7 @@ async def get_detections(
 
 
 @mcp.tool()
+@audited
 async def get_hit(hit_ids: list[str]) -> str:
     """Resolve hit_id citations to their full raw Chainsaw records — the citation verifier.
 
@@ -603,6 +611,7 @@ async def get_hit(hit_ids: list[str]) -> str:
 
 
 @mcp.tool()
+@audited
 async def setup_environment(
     chainsaw_dir: str = "",
     sigma_dir: str = "",
