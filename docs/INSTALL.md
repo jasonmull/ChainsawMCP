@@ -1,7 +1,9 @@
 # Installation
+```
 git clone https://github.com/jasonmull/ChainsawMCP.git
 cd ChainsawMCP
 pip install -e .
+```
 
 # Add MCP Server to Claude
 Navigate into your case directory first — this anchors all generated artifacts automatically:
