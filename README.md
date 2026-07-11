@@ -218,6 +218,8 @@ Then add `http://localhost:8000/mcp` as an MCP server in OpenWebUI under **Admin
 
 > **Note:** OpenWebUI MCP integration and local LLM tool-calling support are actively evolving. Results may vary depending on model and OpenWebUI version.
 
+**Using a non-tool-calling model (e.g. Foundation-Sec-8B) for analysis:** if native MCP tool injection doesn't work reliably for your model, see `extras/chainsaw_filter.py` (a one-shot `!analyse <path>` pipeline) and `extras/chainsaw_pipe.py` (an interactive Pipe pairing a tool-calling model like Qwen with a non-tool-calling analysis model) — both run via [mcpo](https://github.com/open-webui/mcpo) instead of native MCP. See `docs/ADR-combined.md` Decisions 8 and 24 for the full design.
+
 ---
 
 ## MCP Tools

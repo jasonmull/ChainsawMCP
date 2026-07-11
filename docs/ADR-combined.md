@@ -253,8 +253,8 @@ Trigger syntax: `!analyse <path>` in any OpenWebUI chat.
 ```
 User: !analyse F:\ChainsawEvals
            ↓
-   [Filter: prepare_evidence]
-   [Filter: chainsaw_hunt]
+   [Filter: start_hunt]
+   [Filter: poll load_hunt_results]
    [Filter: chainsaw_report]
    [Filter: get_detections × 3 severities]
            ↓
@@ -829,4 +829,89 @@ claude mcp add ChainsawMCP -- python -m chainsawmcp.server
 | `load_hunt_results` | Load completed results into session; includes provenance record for chain of custody |
 | `chainsaw_report` | Structured summary with severity breakdown; supports `output_format="json"` |
 | `get_detections` | Drill-down by rule name or severity; supports `output_format="json"` with pagination |
+
+---
+
+## Decision 24: Re-align `chainsaw_filter.py` with the detached hunt model, add `chainsaw_pipe.py` for interactive tool-calling models
+
+**Date:** 2026-07-11
+**Status:** Accepted
+**Deciders:** Jason Mull
+
+### Context
+
+Decision 6 made `chainsaw_hunt` synchronous specifically so tool-calling
+clients wouldn't need retry/poll logic, and `chainsaw_filter.py` (Decision 8)
+was written against that shape: `prepare_evidence` then a single blocking
+`chainsaw_hunt` call. Later decisions replaced that synchronous tool
+entirely with the detached job model (`start_hunt` returns almost
+immediately with a `job_id`; results are fetched afterward via
+`load_hunt_results(job_id)`, which raises while the job is still running).
+This left `chainsaw_filter.py` calling a `chainsaw_hunt` endpoint that no
+longer exists.
+
+Separately, the user wanted to keep real interactivity — a tool-calling
+model (e.g. Qwen) deciding what to hunt for and drilling into specific hits
+across a conversation — rather than only the Filter's fixed one-shot
+pipeline. A Filter can't provide that: it only rewrites the incoming message
+once, before OpenWebUI's single selected model responds; it can't make one
+model call another.
+
+### Decision
+
+**`chainsaw_filter.py`**: replaced the `prepare_evidence` + `chainsaw_hunt`
+steps with `start_hunt` (which handles evidence staging internally,
+including E01 mounting) followed by polling `load_hunt_results` via a new
+`_poll_load_results` helper. Polling uses `asyncio.sleep` between attempts
+(not `time.sleep`, since `inlet()` runs inside OpenWebUI's live event loop)
+and distinguishes "still running" (keep polling, bounded by `hunt_timeout`)
+from any other error (fail fast, no retry). A new `poll_interval` valve
+controls the sleep between polls; `hunt_timeout`'s meaning changed from "one
+blocking call's timeout" to "total time to wait for the detached hunt."
+
+**`chainsaw_pipe.py`** (new file): an OpenWebUI Pipe registering as its own
+selectable model. Each turn it runs `tool_model` (e.g. Qwen) as a real
+tool-calling agent against Ollama's native `/api/chat`, with tool schemas
+for `start_hunt`, `chainsaw_report`, `get_detections`, and `get_hit`
+(`load_hunt_results` is not exposed as a separate tool). Because the Pipe's
+own code executes each tool call on the model's behalf, `start_hunt` is
+special-cased to poll `load_hunt_results` to completion internally before
+returning — the tool-calling model always sees a single, ordinary
+synchronous `start_hunt` result and never encounters "still running." Once
+the model stops requesting tools (or `max_tool_iterations` is reached), the
+accumulated tool-call transcript plus the analyst's original question are
+handed to `analysis_model` (e.g. Foundation-Sec-8B-Reasoning) with no tool
+schema, to write the answer. Because the MCP server keeps hunt results in
+module-level session state for the life of the process, follow-up turns can
+call `get_detections`/`get_hit` again against the same loaded hunt without
+re-running it, giving genuine multi-turn drill-down.
+
+The `_call`/`_extract_result`/`_extract_job_id`/`_poll_load_results` helpers
+are duplicated between the two files rather than factored into a shared
+module, since OpenWebUI Functions are normally installed as a single
+self-contained file via the Admin UI and cross-file imports are not assumed
+to work reliably across installs.
+
+### Consequences
+
+- `chainsaw_filter.py` works again against the current server API; no
+  change to its report-construction logic or 8-section IR report template.
+- `chainsaw_pipe.py` depends on the analyst's installed Ollama version
+  supporting tool-calling `/api/chat` requests for `tool_model`, and on
+  `tool_model` actually being tool-calling-capable (e.g. Qwen2.5/Qwen3.5;
+  Foundation-Sec-8B is not, which is why it is only ever used as
+  `analysis_model`).
+- Both files require running `chainsaw_hunt` against a real OpenWebUI +
+  mcpo + Ollama + ChainsawMCP stack to fully verify — not available in the
+  development sandbox this change was authored in, which was limited to
+  static checks and mocked-HTTP logic traces (job-ID regex against real
+  `start_hunt`/`start_bulk_hunt` response strings, and the polling state
+  machine against the three `load_hunt_results` response shapes).
+- The Model Compatibility Summary table above (Decision 8) should be read
+  with this update in mind: the "Filter" column was always about the
+  single-model Filter path (works for any model, tool-calling or not); the
+  autonomous mcpo-only path for tool-calling models without a Pipe (i.e.
+  connecting OpenWebUI's own tool-calling directly to mcpo, bypassing both
+  the Filter and the new Pipe) still hits the same "still running" wall this
+  decision fixes only for `chainsaw_pipe.py`'s own tool-execution layer.
 | `setup_environment` | Install Chainsaw and Sigma rules; write paths to `~/.chainsawmcp/config.json` |

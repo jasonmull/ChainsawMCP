@@ -26,14 +26,19 @@ mcpo_url         : base URL of the mcpo instance wrapping ChainsawMCP
                    default: http://localhost:8081
 keyword          : trigger prefix to watch for
                    default: !analyse
-hunt_timeout     : seconds to wait for chainsaw_hunt (may be very long)
+hunt_timeout     : total seconds to wait for the detached hunt to complete
+                   (start_hunt returns almost immediately; this bounds how
+                   long the filter polls load_hunt_results afterward)
                    default: 600
+poll_interval    : seconds to sleep between load_hunt_results polls
+                   default: 10
 max_detections   : max detections fetched per severity bucket
                    default: 50
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import textwrap
 from typing import Any
@@ -123,6 +128,41 @@ def _parse_path(text: str, keyword: str) -> str | None:
     return remainder if remainder else None
 
 
+def _extract_job_id(start_hunt_text: str) -> str | None:
+    """
+    Extract the job ID from start_hunt's response text, e.g.
+    "Hunt started (job ID: abc123).\n  Evidence : ..."
+    Returns None if the pattern cannot be found.
+    """
+    import re
+    match = re.search(r"job ID:\s*([0-9a-fA-F]+)\)", start_hunt_text)
+    return match.group(1) if match else None
+
+
+async def _poll_load_results(
+    base: str, job_id: str, timeout: int, interval: int
+) -> tuple[bool, str]:
+    """
+    Poll POST {base}/load_hunt_results with {"job_id": job_id} until it
+    succeeds, fails with a non-"still running" error, or timeout elapses.
+    Returns (success, text) — same contract as _call().
+    """
+    import time as _time
+    deadline = _time.monotonic() + timeout
+    while True:
+        ok, result = _call(f"{base}/load_hunt_results", {"job_id": job_id}, timeout=60)
+        if ok:
+            return True, result
+        if "still running" not in result.lower():
+            return False, result
+        if _time.monotonic() >= deadline:
+            return False, (
+                f"Timed out after {timeout}s waiting for job {job_id} to "
+                f"complete. Last status: {result}"
+            )
+        await asyncio.sleep(interval)
+
+
 def _count_hits(report_text: str) -> int | None:
     """
     Try to extract a total hit count from the chainsaw_report output.
@@ -152,6 +192,7 @@ class Filter:
         mcpo_url: str = "http://localhost:8081"
         keyword: str = "!analyse"
         hunt_timeout: int = 600
+        poll_interval: int = 10
         max_detections: int = 50
 
     def __init__(self):
@@ -201,34 +242,47 @@ class Filter:
         fatal = False
         fatal_message = ""
 
-        # 1. prepare_evidence
+        # 1. start_hunt — returns almost immediately with a job_id; Chainsaw
+        #    runs detached and start_hunt itself handles evidence staging
+        #    (including E01 mounting), so prepare_evidence is not called here.
         ok, result = _call(
-            f"{base}/prepare_evidence",
+            f"{base}/start_hunt",
             {"path": evidence_path},
             timeout=120,
         )
+        job_id: str | None = None
         if not ok:
             fatal = True
             fatal_message = (
-                f"prepare_evidence failed: {result}\n\n"
+                f"start_hunt failed: {result}\n\n"
                 "Possible causes: path does not exist, unsupported format, "
                 "or mcpo is unreachable."
             )
         else:
-            sections.append(f"## Evidence Preparation\n\n{result}")
+            job_id = _extract_job_id(result)
+            if job_id is None:
+                fatal = True
+                fatal_message = (
+                    "start_hunt succeeded but no job ID could be parsed "
+                    f"from its response:\n\n{result}"
+                )
+            else:
+                sections.append(f"## Hunt Started\n\n{result}")
 
-        # 2. chainsaw_hunt  (long-running — use hunt_timeout)
+        # 2. poll load_hunt_results until the detached hunt completes
         if not fatal:
-            ok, result = _call(
-                f"{base}/chainsaw_hunt",
-                {},
+            ok, result = await _poll_load_results(
+                base, job_id,
                 timeout=self.valves.hunt_timeout,
+                interval=self.valves.poll_interval,
             )
             if not ok:
                 fatal = True
                 fatal_message = (
-                    f"chainsaw_hunt failed: {result}\n\n"
-                    "The hunt did not complete.  Evidence may still be staged."
+                    f"load_hunt_results failed or timed out: {result}\n\n"
+                    "The hunt may still be running in the background; you "
+                    "can retry the trigger shortly, or check the job "
+                    "directory directly."
                 )
             else:
                 sections.append(f"## Chainsaw Hunt Results\n\n{result}")
