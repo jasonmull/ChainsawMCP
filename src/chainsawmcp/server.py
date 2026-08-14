@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from .audit import audited
 from .chainsaw import ChainsawError, HuntResult, run_hunt_async, spawn_detached_config, spawn_detached_from_evidence, spawn_hunt_detached
@@ -25,7 +25,7 @@ from .report import format_summary, format_summary_json, get_detections_json, wr
 from .report import get_detections as _filter_detections
 from .setup import DEFAULT_CHAINSAW_DIR, DEFAULT_SIGMA_DIR, check_environment, setup_environment as _run_setup
 
-mcp = FastMCP("ChainsawMCP")
+mcp = MCPServer("ChainsawMCP")
 
 
 class _SessionState:
@@ -786,33 +786,13 @@ def _run_stdio() -> None:
 
 
 def _run_http() -> None:
-    import contextlib
-    from collections.abc import AsyncIterator
-
     import uvicorn
-    from starlette.applications import Starlette
     from starlette.middleware.cors import CORSMiddleware
-    from starlette.routing import Mount
-    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
     host = get_http_host()
     port = get_http_port()
 
-    session_manager = StreamableHTTPSessionManager(
-        app=mcp._mcp_server,
-        event_store=None,
-        json_response=False,
-    )
-
-    @contextlib.asynccontextmanager
-    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
-        async with session_manager.run():
-            yield
-
-    starlette_app = Starlette(
-        lifespan=lifespan,
-        routes=[Mount("/mcp", app=session_manager.handle_request)],
-    )
+    starlette_app = mcp.streamable_http_app(host=host, json_response=False)
     starlette_app = CORSMiddleware(
         starlette_app,
         allow_origins=["*"],
