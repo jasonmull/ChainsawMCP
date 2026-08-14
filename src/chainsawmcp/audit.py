@@ -95,7 +95,7 @@ def _append(record: dict) -> None:
 def audited(fn):
     """Wrap an async MCP tool handler to emit a structured execution-log record.
 
-    ``functools.wraps`` preserves the wrapped function's signature so FastMCP's
+    ``functools.wraps`` preserves the wrapped function's signature so the SDK's
     introspection (and the generated tool schema) is unchanged. Tool errors are
     logged with ``status: "error"`` and re-raised — logging never swallows them.
     """
