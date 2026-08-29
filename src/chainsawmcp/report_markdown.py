@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .config import safe_child
 from .jobs import read_provenance
 from .report import (
     _count_by_severity,
@@ -942,7 +943,15 @@ def write_incident_report(
     min_severity: str = "high",
     timeline_max_rows: int = 200,
 ) -> tuple[Path, Path]:
-    """Write incident_report.md and incident_report.json. Returns both paths."""
+    """Write incident_report.md and incident_report.json. Returns both paths.
+
+    Both filenames are fixed constants, but they are still built through safe_child so
+    the two artifacts provably land inside output_dir — a symlinked or relative
+    output_dir cannot redirect a write elsewhere. Under Protocol SIFT this is the
+    mechanical form of the evidence-immutability rule: reports go to the reports
+    directory, never anywhere the resolution could wander to.
+    """
+    output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     context = build_context(
         hits,
@@ -952,13 +961,13 @@ def write_incident_report(
         timeline_max_rows=timeline_max_rows,
     )
 
-    md_path = output_dir / "incident_report.md"
+    md_path = safe_child(output_dir, "incident_report.md")
     md_path.write_text(
         render_report_markdown(hits, job_id, evidence_path, context=context),
         encoding="utf-8",
     )
 
-    json_path = output_dir / "incident_report.json"
+    json_path = safe_child(output_dir, "incident_report.json")
     json_path.write_text(
         json.dumps(
             build_report_json(hits, job_id, evidence_path, context=context),

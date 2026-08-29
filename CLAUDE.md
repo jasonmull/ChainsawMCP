@@ -61,10 +61,22 @@ change `report_spec.py`.
 - JSON output from Chainsaw is the interface contract — parse defensively
 - Hits are returned to the client grouped by rule for easy analysis
 
+## Path handling for MCP arguments
+Any filesystem path built from a value that arrived over MCP (`job_id`, a report `path`,
+an output directory) must go through `config.ensure_within()` or `config.safe_child()`.
+Both resolve before comparing, so `..` segments and symlinks are covered.
+
+This is not routine defensiveness: the server feeds adversary-authored text — command
+lines and script blocks pulled from a compromised host's event logs — to an LLM that can
+call these tools, so a path argument is reachable by prompt injection, not just by the
+analyst. `prepare_evidence` and `start_hunt` take arbitrary paths by design (they have to
+reach the evidence); everything else should be confined.
+
 ## What NOT to Do
 - Don't hardcode paths or binary names
 - Don't make server-side LLM calls — the client handles reasoning
 - Don't rewrite Chainsaw logic in Python
+- Don't join an MCP-supplied value onto a path directly — use the helpers above
 
 ## Project Structure (target)
 ```

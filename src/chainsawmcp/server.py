@@ -9,7 +9,7 @@ from mcp.server.mcpserver import MCPServer
 
 from .audit import audited
 from .chainsaw import ChainsawError, HuntResult, run_hunt_async, spawn_detached_config, spawn_detached_from_evidence, spawn_hunt_detached
-from .config import get_case_dir, get_http_host, get_http_port, get_jobs_dir, get_output_dir, is_windows
+from .config import ensure_within, get_case_dir, get_http_host, get_http_port, get_jobs_dir, get_output_dir, is_windows
 from .evidence import EvidenceError, PreparedEvidence
 from .evidence import prepare_evidence as _stage_evidence
 from .jobs import (
@@ -17,6 +17,7 @@ from .jobs import (
     get_latest_completed_job,
     is_pid_alive,
     load_job_results,
+    log_path,
     read_job,
     read_provenance,
     results_path,
@@ -378,7 +379,11 @@ async def load_hunt_results(job_id: str = "") -> str:
                 )
             raise ValueError("No completed hunt results found. Run start_hunt to begin a hunt.")
 
-    job = read_job(job_id)
+    try:
+        job = read_job(job_id)
+    except ValueError as exc:
+        # job_id came from the client; _job_dir rejected it as a path traversal.
+        raise ValueError(f"Invalid job_id '{job_id}': {exc}") from exc
     if job is None:
         raise ValueError(f"Job '{job_id}' not found in {get_jobs_dir()}.")
 
@@ -393,7 +398,7 @@ async def load_hunt_results(job_id: str = "") -> str:
     elif status == "error":
         import json as _json
         stderr_snippet = ""
-        lpath = get_jobs_dir() / job_id / "chainsaw_stderr.log"
+        lpath = log_path(job_id)
         if lpath.exists():
             try:
                 stderr_snippet = lpath.read_text(encoding="utf-8", errors="replace").strip()[-500:]
@@ -683,7 +688,21 @@ async def validate_report(path: str = "") -> str:
     if state.hunt_status != "done":
         raise ValueError("No completed hunt results. Call load_hunt_results first.")
 
-    report_path = Path(path) if path else get_output_dir() / "incident_report.md"
+    # path arrives from the client, and this tool reflects fragments of what it reads
+    # (offending timestamps, unresolved hit_ids) back in its result. Confine it to the
+    # reports directory so it cannot be turned into an arbitrary-file read — the only
+    # legitimate target is a report the server itself wrote.
+    output_dir = get_output_dir()
+    candidate = Path(path) if path else Path("incident_report.md")
+    if not candidate.is_absolute():
+        candidate = output_dir / candidate
+    try:
+        report_path = ensure_within(output_dir, candidate)
+    except ValueError as exc:
+        raise ValueError(
+            f"Report path must be inside the reports directory ({output_dir.resolve()}): {exc}"
+        ) from exc
+
     if not report_path.exists():
         raise ValueError(
             f"Report not found: {report_path}. Call build_incident_report first."

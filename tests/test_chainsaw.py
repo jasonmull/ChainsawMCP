@@ -1,14 +1,30 @@
 """Tests for ChainsawMCP components."""
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from chainsawmcp import server
 from chainsawmcp.chainsaw import ChainsawError, HuntResult, _parse_output, run_hunt
-from chainsawmcp.config import get_batch_size, get_ollama_base_url, get_ollama_model
+from chainsawmcp.config import (
+    ensure_within,
+    get_batch_size,
+    get_ollama_base_url,
+    get_ollama_model,
+    safe_child,
+)
+from chainsawmcp.jobs import (
+    create_job,
+    log_path,
+    provenance_path,
+    read_job,
+    read_provenance,
+    results_path,
+)
 from chainsawmcp.evidence import (
     EvidenceError,
     PreparedEvidence,
@@ -1325,3 +1341,134 @@ def test_validator_flags_stub_section(sample_hits, tmp_path, monkeypatch):
     result = validate_report_text(report, sample_hits)
     assert result["pass"] is False
     assert any(v["code"] == "empty_section" for v in result["violations"])
+
+
+# ---------------------------------------------------------------------------
+# Path containment (CWE-22 guards)
+# ---------------------------------------------------------------------------
+
+def test_ensure_within_accepts_paths_inside_base(tmp_path):
+    assert ensure_within(tmp_path, tmp_path / "reports" / "x.md") == (
+        tmp_path / "reports" / "x.md"
+    ).resolve()
+    assert ensure_within(tmp_path, tmp_path) == tmp_path.resolve()
+
+
+def test_ensure_within_rejects_traversal(tmp_path):
+    with pytest.raises(ValueError, match="escapes its permitted directory"):
+        ensure_within(tmp_path / "reports", tmp_path / "reports" / ".." / ".." / "etc")
+
+
+def test_ensure_within_rejects_unrelated_absolute_path(tmp_path):
+    with pytest.raises(ValueError, match="escapes its permitted directory"):
+        ensure_within(tmp_path, Path("/etc/passwd"))
+
+
+def test_ensure_within_rejects_symlink_escape(tmp_path):
+    """Resolution happens before the comparison, so a symlink cannot step outside."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "link").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="escapes its permitted directory"):
+        ensure_within(base, base / "link" / "loot.txt")
+
+
+@pytest.mark.parametrize("bad", ["", "..", ".", "../etc", "a/b", "a\\b", "/etc/passwd"])
+def test_safe_child_rejects_non_components(tmp_path, bad):
+    with pytest.raises(ValueError):
+        safe_child(tmp_path, bad)
+
+
+def test_safe_child_accepts_a_plain_name(tmp_path):
+    assert safe_child(tmp_path, "incident_report.md") == (
+        tmp_path / "incident_report.md"
+    ).resolve()
+
+
+# ---------------------------------------------------------------------------
+# job_id traversal — guarded at _job_dir, so every job path is covered
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad", ["../../etc", "..", "a/b", "/etc", ""])
+def test_job_paths_reject_traversal(tmp_path, monkeypatch, bad):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    for fn in (results_path, log_path, provenance_path, read_job):
+        with pytest.raises(ValueError):
+            fn(bad)
+
+
+def test_job_paths_accept_a_real_job_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    job_id = create_job("/evidence/disk.E01")
+    assert re.fullmatch(r"[0-9a-f]{8}", job_id)
+    assert results_path(job_id).name == "hunt_results.json"
+    assert read_job(job_id)["job_id"] == job_id
+
+
+def test_read_provenance_tolerates_empty_job_id(tmp_path, monkeypatch):
+    """state.job_id is "" before any hunt — that must not raise."""
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    assert read_provenance("") is None
+
+
+def test_read_provenance_rejects_traversal(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    with pytest.raises(ValueError):
+        read_provenance("../../../etc")
+
+
+# ---------------------------------------------------------------------------
+# validate_report path confinement
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def loaded_session(tmp_path, monkeypatch):
+    """Put the server in a 'hunt done' state pointed at tmp_path, then restore it."""
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    saved = (server.state.hunt_status, server.state.hits, server.state.job_id)
+    server.state.hunt_status = "done"
+    server.state.hits = [{"name": "R", "level": "high", "hit_id": "j-000001",
+                          "timestamp": "2018-01-01T00:00:00+00:00"}]
+    server.state.job_id = ""
+    yield tmp_path
+    (server.state.hunt_status, server.state.hits, server.state.job_id) = saved
+
+
+async def test_validate_report_reads_the_default_report(loaded_session):
+    await server.build_incident_report()
+    result = json.loads(await server.validate_report())
+    assert result["report_file"].endswith("incident_report.md")
+    # Unfilled skeleton — the point is that it read the file, not that it passed.
+    assert result["pass"] is False
+
+
+@pytest.mark.parametrize("attack", [
+    "/etc/passwd",
+    "../../../../etc/passwd",
+    "../../analysis/forensic_audit.log",
+])
+async def test_validate_report_refuses_paths_outside_reports_dir(loaded_session, attack):
+    await server.build_incident_report()
+    with pytest.raises(ValueError, match="must be inside the reports directory"):
+        await server.validate_report(path=attack)
+
+
+async def test_validate_report_accepts_a_relative_name_in_reports_dir(loaded_session):
+    """A bare filename resolves against the reports dir, not the process cwd."""
+    await server.build_incident_report()
+    result = json.loads(await server.validate_report(path="incident_report.md"))
+    assert result["report_file"].endswith("incident_report.md")
+
+
+async def test_validate_report_does_not_leak_file_existence_outside_reports(loaded_session):
+    """The guard fires before the exists() check, so it is not an existence oracle."""
+    await server.build_incident_report()
+    with pytest.raises(ValueError, match="must be inside the reports directory"):
+        await server.validate_report(path="/definitely/does/not/exist/anywhere")
+
+
+async def test_load_hunt_results_rejects_traversal_job_id(loaded_session):
+    with pytest.raises(ValueError, match="Invalid job_id"):
+        await server.load_hunt_results(job_id="../../../etc")

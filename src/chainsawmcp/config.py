@@ -6,6 +6,46 @@ import platform
 from pathlib import Path
 
 
+def ensure_within(base: Path, candidate: Path) -> Path:
+    """Return *candidate* resolved, or raise ValueError if it escapes *base*.
+
+    Every filesystem path the server builds from a value that arrived over MCP goes
+    through here. Resolution happens before the comparison, so neither `..` segments
+    nor symlinks can be used to step outside *base*.
+
+    This matters more than it would in an ordinary local tool: ChainsawMCP feeds
+    adversary-authored text — command lines and script blocks recovered from a
+    compromised host's event logs — into an LLM that can call these tools. A path
+    argument is therefore reachable by prompt injection, not just by the analyst.
+    """
+    base_resolved = base.resolve()
+    candidate_resolved = candidate.resolve()
+    if not candidate_resolved.is_relative_to(base_resolved):
+        raise ValueError(
+            f"Path escapes its permitted directory: {candidate_resolved} "
+            f"is not inside {base_resolved}"
+        )
+    return candidate_resolved
+
+
+def safe_child(base: Path, name: str) -> Path:
+    """Join a single untrusted path component onto *base*.
+
+    *name* must be exactly one component — not absolute, not `.` or `..`, and with no
+    separator of either platform's flavour. The result is then containment-checked, so
+    a symlinked *base* cannot be used to escape either.
+    """
+    if not name or not isinstance(name, str):
+        raise ValueError(f"Invalid path component: {name!r}")
+    parts = Path(name).parts
+    if Path(name).is_absolute() or len(parts) != 1 or name in (".", "..") or "\\" in name:
+        raise ValueError(
+            f"Invalid path component {name!r}: expected a single name, "
+            "not a path or a traversal sequence."
+        )
+    return ensure_within(base, base / name)
+
+
 def get_config_path() -> Path:
     return Path.home() / ".chainsawmcp" / "config.json"
 

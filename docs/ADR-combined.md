@@ -1001,3 +1001,42 @@ that call.
 - A report can now fail validation. That is the point, but it means a model that cannot produce
   a citation for a claim will stall rather than quietly emit an unsupported one — the analyst is
   told which violations remain after three attempts.
+
+### Addendum: path containment (CodeQL `py/path-injection`, PR #61)
+
+Code scanning flagged seven `Uncontrolled data used in path expression` alerts against
+this change. They were not equally real, and the split is worth recording:
+
+- **`validate_report(path)` — genuinely new.** This was the first tool in the server that
+  read a caller-specified arbitrary file *and reflected fragments of it back*:
+  `_check_timestamps` echoes matched timestamps verbatim and `unresolved` echoes every
+  `ref=`-shaped token found. That matters more here than in an ordinary local tool,
+  because ChainsawMCP deliberately feeds adversary-authored text — command lines and
+  script blocks recovered from a compromised host — to an LLM that can call these tools.
+  A path argument is reachable by prompt injection, not only by the analyst.
+- **`read_provenance(job_id)` — a new sink on pre-existing taint.** `_job_dir()` is
+  byte-identical on `main`, where `read_job`, `results_path`, `log_path` and
+  `load_job_results` already built paths from an unvalidated `job_id`. CodeQL did not
+  flag those only because they are in the base.
+- **The three `write_incident_report` alerts — pattern parity.** Structurally identical
+  to the pre-existing, unflagged `write_full_report`, with `output_dir` coming from
+  `get_output_dir()` (operator configuration via env var, not client input).
+
+**Decision:** add `config.ensure_within()` and `config.safe_child()` and route every
+filesystem path built from an MCP argument through them.
+
+- `jobs._job_dir()` uses `safe_child`, which fixes the two flagged alerts *and* hardens
+  the four pre-existing sinks in one place. `load_hunt_results` also now goes through
+  `log_path()` rather than re-joining `job_id` by hand.
+- `validate_report` confines `path` to `get_output_dir()`, accepting a bare filename by
+  resolving it against that directory rather than the process cwd. The guard runs
+  *before* the `exists()` check, so the tool is not a file-existence oracle either.
+- `write_incident_report` resolves `output_dir` and builds both artifacts via
+  `safe_child`. The filenames are fixed constants, so this is future-proofing and
+  scanner-satisfaction rather than a fix for live risk — but it also gives the Protocol
+  SIFT evidence-immutability rule a mechanical form instead of a convention.
+
+Containment is checked *after* resolution, so `..` segments and symlinked directories are
+both covered. `job_id` validation is deliberately containment-based rather than a
+`[0-9a-f]{8}` format match: the format is what `create_job` happens to emit today, and
+pinning tests and fixtures to it would couple them to an incidental detail.

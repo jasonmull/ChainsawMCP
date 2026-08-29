@@ -8,12 +8,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .config import get_jobs_dir
+from .config import get_jobs_dir, safe_child
 from .chainsaw import _parse_output_file
 
 
 def _job_dir(job_id: str) -> Path:
-    return get_jobs_dir() / job_id
+    """Resolve a job's directory, rejecting any job_id that escapes the jobs root.
+
+    job_id reaches here from load_hunt_results, which takes it straight from the MCP
+    client, so it is untrusted. Guarding the single place every job path is built from
+    covers read_job, results_path, log_path, provenance_path and load_job_results at
+    once. Real ids are `uuid.uuid4().hex[:8]` (see create_job).
+    """
+    return safe_child(get_jobs_dir(), job_id)
 
 
 def _job_file(job_id: str) -> Path:
