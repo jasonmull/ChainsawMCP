@@ -2,14 +2,14 @@
 
 import asyncio
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
 from .audit import audited
 from .chainsaw import ChainsawError, HuntResult, run_hunt_async, spawn_detached_config, spawn_detached_from_evidence, spawn_hunt_detached
-from .config import ensure_within, get_case_dir, get_http_host, get_http_port, get_jobs_dir, get_output_dir, is_windows
+from .config import get_case_dir, get_http_host, get_http_port, get_jobs_dir, get_output_dir, is_windows
 from .evidence import EvidenceError, PreparedEvidence
 from .evidence import prepare_evidence as _stage_evidence
 from .jobs import (
@@ -382,8 +382,10 @@ async def load_hunt_results(job_id: str = "") -> str:
     try:
         job = read_job(job_id)
     except ValueError as exc:
-        # job_id came from the client; _job_dir rejected it as a path traversal.
-        raise ValueError(f"Invalid job_id '{job_id}': {exc}") from exc
+        # job_id came from the client. _job_dir resolves it against the on-disk
+        # listing, so this covers both a traversal attempt and a job that is simply
+        # not there — neither reaches the filesystem as a path.
+        raise ValueError(str(exc)) from exc
     if job is None:
         raise ValueError(f"Job '{job_id}' not found in {get_jobs_dir()}.")
 
@@ -689,23 +691,28 @@ async def validate_report(path: str = "") -> str:
         raise ValueError("No completed hunt results. Call load_hunt_results first.")
 
     # path arrives from the client, and this tool reflects fragments of what it reads
-    # (offending timestamps, unresolved hit_ids) back in its result. Confine it to the
-    # reports directory so it cannot be turned into an arbitrary-file read — the only
-    # legitimate target is a report the server itself wrote.
+    # (offending timestamps, unresolved hit_ids) back in its result — so an unconstrained
+    # read here would be an arbitrary-file-disclosure primitive reachable by prompt
+    # injection from event log content. The only legitimate target is a report the server
+    # itself wrote, so the requested name is matched against the reports directory
+    # listing and the path is taken from the matching entry. The caller's string is only
+    # ever compared, never joined onto a path.
     output_dir = get_output_dir()
-    candidate = Path(path) if path else Path("incident_report.md")
-    if not candidate.is_absolute():
-        candidate = output_dir / candidate
-    try:
-        report_path = ensure_within(output_dir, candidate)
-    except ValueError as exc:
-        raise ValueError(
-            f"Report path must be inside the reports directory ({output_dir.resolve()}): {exc}"
-        ) from exc
+    requested = (path or "incident_report.md").strip()
+    wanted = PurePosixPath(requested.replace("\\", "/")).name
 
-    if not report_path.exists():
+    report_path = None
+    if wanted and output_dir.is_dir():
+        for entry in output_dir.iterdir():
+            if entry.is_file() and entry.name == wanted:
+                report_path = entry
+                break
+
+    if report_path is None:
         raise ValueError(
-            f"Report not found: {report_path}. Call build_incident_report first."
+            f"No report named '{wanted or requested}' in the reports directory "
+            f"({output_dir}). validate_report only reads reports the server wrote — "
+            "call build_incident_report first."
         )
 
     result = validate_report_text(

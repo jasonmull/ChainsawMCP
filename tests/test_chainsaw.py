@@ -11,11 +11,9 @@ import pytest
 from chainsawmcp import server
 from chainsawmcp.chainsaw import ChainsawError, HuntResult, _parse_output, run_hunt
 from chainsawmcp.config import (
-    ensure_within,
     get_batch_size,
     get_ollama_base_url,
     get_ollama_model,
-    safe_child,
 )
 from chainsawmcp.jobs import (
     create_job,
@@ -1344,48 +1342,12 @@ def test_validator_flags_stub_section(sample_hits, tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Path containment (CWE-22 guards)
+# Path traversal guards (CWE-22)
+#
+# The client-supplied value is never joined onto a path: it is matched against the
+# on-disk listing and the path comes from the matching entry. These tests pin that
+# behaviour rather than the mechanism, so they still hold if the lookup changes.
 # ---------------------------------------------------------------------------
-
-def test_ensure_within_accepts_paths_inside_base(tmp_path):
-    assert ensure_within(tmp_path, tmp_path / "reports" / "x.md") == (
-        tmp_path / "reports" / "x.md"
-    ).resolve()
-    assert ensure_within(tmp_path, tmp_path) == tmp_path.resolve()
-
-
-def test_ensure_within_rejects_traversal(tmp_path):
-    with pytest.raises(ValueError, match="escapes its permitted directory"):
-        ensure_within(tmp_path / "reports", tmp_path / "reports" / ".." / ".." / "etc")
-
-
-def test_ensure_within_rejects_unrelated_absolute_path(tmp_path):
-    with pytest.raises(ValueError, match="escapes its permitted directory"):
-        ensure_within(tmp_path, Path("/etc/passwd"))
-
-
-def test_ensure_within_rejects_symlink_escape(tmp_path):
-    """Resolution happens before the comparison, so a symlink cannot step outside."""
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    base = tmp_path / "base"
-    base.mkdir()
-    (base / "link").symlink_to(outside, target_is_directory=True)
-    with pytest.raises(ValueError, match="escapes its permitted directory"):
-        ensure_within(base, base / "link" / "loot.txt")
-
-
-@pytest.mark.parametrize("bad", ["", "..", ".", "../etc", "a/b", "a\\b", "/etc/passwd"])
-def test_safe_child_rejects_non_components(tmp_path, bad):
-    with pytest.raises(ValueError):
-        safe_child(tmp_path, bad)
-
-
-def test_safe_child_accepts_a_plain_name(tmp_path):
-    assert safe_child(tmp_path, "incident_report.md") == (
-        tmp_path / "incident_report.md"
-    ).resolve()
-
 
 # ---------------------------------------------------------------------------
 # job_id traversal — guarded at _job_dir, so every job path is covered
@@ -1413,10 +1375,30 @@ def test_read_provenance_tolerates_empty_job_id(tmp_path, monkeypatch):
     assert read_provenance("") is None
 
 
-def test_read_provenance_rejects_traversal(tmp_path, monkeypatch):
+def test_read_provenance_returns_none_for_unknown_job(tmp_path, monkeypatch):
+    """Only ever called with a server-generated job_id, so None beats raising."""
     monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
-    with pytest.raises(ValueError):
-        read_provenance("../../../etc")
+    assert read_provenance("../../../etc") is None
+    assert read_provenance("nosuchjob") is None
+
+
+def test_job_lookup_never_joins_the_caller_string(tmp_path, monkeypatch):
+    """A directory that exists outside the jobs root stays unreachable by traversal."""
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    outside = tmp_path / "secrets"
+    outside.mkdir()
+    (outside / "hunt_results.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "analysis").mkdir()
+    with pytest.raises(ValueError, match="No such job"):
+        results_path("../secrets")
+
+
+def test_job_lookup_rejects_an_id_that_is_not_a_real_job(tmp_path, monkeypatch):
+    """Stronger than containment: an id must name a job that actually exists."""
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    create_job("/evidence/disk.E01")
+    with pytest.raises(ValueError, match="No such job"):
+        read_job("deadbeef")
 
 
 # ---------------------------------------------------------------------------
@@ -1451,7 +1433,7 @@ async def test_validate_report_reads_the_default_report(loaded_session):
 ])
 async def test_validate_report_refuses_paths_outside_reports_dir(loaded_session, attack):
     await server.build_incident_report()
-    with pytest.raises(ValueError, match="must be inside the reports directory"):
+    with pytest.raises(ValueError, match="is not in the reports directory|No report named"):
         await server.validate_report(path=attack)
 
 
@@ -1463,12 +1445,14 @@ async def test_validate_report_accepts_a_relative_name_in_reports_dir(loaded_ses
 
 
 async def test_validate_report_does_not_leak_file_existence_outside_reports(loaded_session):
-    """The guard fires before the exists() check, so it is not an existence oracle."""
+    """Lookup is by listing, so a path outside the reports dir is never even stat-ed."""
     await server.build_incident_report()
-    with pytest.raises(ValueError, match="must be inside the reports directory"):
+    with pytest.raises(ValueError, match="is not in the reports directory|No report named"):
         await server.validate_report(path="/definitely/does/not/exist/anywhere")
 
 
-async def test_load_hunt_results_rejects_traversal_job_id(loaded_session):
-    with pytest.raises(ValueError, match="Invalid job_id"):
-        await server.load_hunt_results(job_id="../../../etc")
+@pytest.mark.parametrize("bad", ["../../../etc", "..", "a/b", "deadbeef"])
+async def test_load_hunt_results_rejects_unknown_or_traversing_job_id(loaded_session, bad):
+    """Traversal and a merely-nonexistent id fail the same way: neither is a real job."""
+    with pytest.raises(ValueError, match="No such job"):
+        await server.load_hunt_results(job_id=bad)

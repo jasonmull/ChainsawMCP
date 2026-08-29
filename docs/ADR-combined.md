@@ -1022,21 +1022,33 @@ this change. They were not equally real, and the split is worth recording:
   to the pre-existing, unflagged `write_full_report`, with `output_dir` coming from
   `get_output_dir()` (operator configuration via env var, not client input).
 
-**Decision:** add `config.ensure_within()` and `config.safe_child()` and route every
-filesystem path built from an MCP argument through them.
+**First attempt (rejected):** a shared `ensure_within()` helper doing `resolve()` +
+`is_relative_to()`. It blocked every traversal — verified end-to-end — but CodeQL treats
+`Path.resolve()` as a path-expression sink, does not recognise `is_relative_to()` as a
+sanitizing barrier, and does not propagate a guard across a function boundary. The alert
+count went from 7 to 11: every `.resolve()` added while fixing became a new sink, and the
+helper itself was reported. That is worth recording because the instinct to reach for a
+containment helper is a natural one here.
 
-- `jobs._job_dir()` uses `safe_child`, which fixes the two flagged alerts *and* hardens
-  the four pre-existing sinks in one place. `load_hunt_results` also now goes through
-  `log_path()` rather than re-joining `job_id` by hand.
-- `validate_report` confines `path` to `get_output_dir()`, accepting a bare filename by
-  resolving it against that directory rather than the process cwd. The guard runs
-  *before* the `exists()` check, so the tool is not a file-existence oracle either.
-- `write_incident_report` resolves `output_dir` and builds both artifacts via
-  `safe_child`. The filenames are fixed constants, so this is future-proofing and
-  scanner-satisfaction rather than a fix for live risk — but it also gives the Protocol
-  SIFT evidence-immutability rule a mechanical form instead of a convention.
+**Decision:** do not let a value that arrived over MCP reach a path join at all. Match it
+against the on-disk listing and build the path from the matching entry, so the caller's
+string is only ever *compared*.
 
-Containment is checked *after* resolution, so `..` segments and symlinked directories are
-both covered. `job_id` validation is deliberately containment-based rather than a
-`[0-9a-f]{8}` format match: the format is what `create_job` happens to emit today, and
-pinning tests and fixtures to it would couple them to an incidental detail.
+- `jobs._job_dir()` iterates the jobs root and returns the entry whose name equals the
+  requested `job_id`. This covers `read_job`, `results_path`, `log_path`,
+  `provenance_path` and `load_job_results` in one place, and is strictly stronger than
+  containment: an id must name a job that actually exists. `create_job` uses a separate
+  `_new_job_dir()` because the id it passes is a `uuid4()` it just generated and the
+  directory does not exist yet. `load_hunt_results` also now goes through `log_path()`
+  rather than re-joining `job_id` by hand — a sink CodeQL never flagged.
+- `validate_report` takes the basename of the requested path and looks it up in the
+  reports directory listing, reading only a file the server itself wrote. The lookup
+  happens before any `exists()` call, so the tool is not a file-existence oracle either.
+- `write_incident_report` writes two fixed filenames under `get_output_dir()`. No value
+  from MCP participates in either path; `output_dir` is operator configuration
+  (`CHAINSAW_OUTPUT_DIR` / `CHAINSAWMCP_CASE_DIR` / cwd), the same shape as an
+  `--output-dir` flag. The alerts against it are false positives and the code is left in
+  its original form rather than contorted to satisfy the scanner.
+
+`read_provenance()` returns `None` rather than raising for an unknown id: it is only ever
+called with `state.job_id`, and "no provenance for this job" is its documented contract.

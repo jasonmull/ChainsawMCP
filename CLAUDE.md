@@ -62,9 +62,16 @@ change `report_spec.py`.
 - Hits are returned to the client grouped by rule for easy analysis
 
 ## Path handling for MCP arguments
-Any filesystem path built from a value that arrived over MCP (`job_id`, a report `path`,
-an output directory) must go through `config.ensure_within()` or `config.safe_child()`.
-Both resolve before comparing, so `..` segments and symlinks are covered.
+**Never join a value that arrived over MCP onto a filesystem path.** Match it against the
+on-disk listing and build the path from the matching entry, so the caller's string is only
+ever compared. `jobs._job_dir()` and `validate_report` both do this.
+
+This is stronger than a containment check (`resolve()` + `is_relative_to()`), which was
+tried first and rejected: it also requires the target to actually exist, and it leaves no
+tainted value in the path expression at all. A containment helper is additionally invisible
+to CodeQL, which treats `Path.resolve()` as a sink and does not recognise `is_relative_to()`
+as a barrier or propagate a guard across a function boundary — so the helper itself becomes
+the reported sink.
 
 This is not routine defensiveness: the server feeds adversary-authored text — command
 lines and script blocks pulled from a compromised host's event logs — to an LLM that can
@@ -76,7 +83,7 @@ reach the evidence); everything else should be confined.
 - Don't hardcode paths or binary names
 - Don't make server-side LLM calls — the client handles reasoning
 - Don't rewrite Chainsaw logic in Python
-- Don't join an MCP-supplied value onto a path directly — use the helpers above
+- Don't join an MCP-supplied value onto a path — resolve it through the listing instead
 
 ## Project Structure (target)
 ```
