@@ -915,3 +915,140 @@ to work reliably across installs.
   the Filter and the new Pipe) still hits the same "still running" wall this
   decision fixes only for `chainsaw_pipe.py`'s own tool-execution layer.
 | `setup_environment` | Install Chainsaw and Sigma rules; write paths to `~/.chainsawmcp/config.json` |
+
+---
+
+## Decision 25: Server-rendered report skeleton + canonical spec for cross-provider consistency
+
+**Problem:** The same evidence produced structurally different incident reports depending on
+which model did the analysis. The cause was that the report format had no single definition
+and three code paths disagreed about what one was:
+
+| Path | Report spec before this change |
+|---|---|
+| `extras/chainsaw_filter.py` | A detailed 8-section IR template, embedded in the file |
+| `extras/chainsaw_pipe.py` | The same 8 section *names* in one sentence, no per-section detail |
+| `skills/evtx-analysis/SKILL.md` (Claude Code) | **Nothing** — no template, no section list |
+
+With no spec on the Claude path the model invented one; `docs/DatasetOutput/FINDEVIL_comprehensive_report.md`
+uses 8 sections of its own that match neither of the other two. The server registered no MCP
+prompts and no tool description mentioned report structure, so nothing provider-neutral carried
+the format. Telling each client to "use the same headings" would not have fixed it: instruction
+adherence is exactly the thing that varies between a hosted model and a quantised local one.
+
+**Decision:** Move the report contract into the server, and render deterministically everything
+that can be derived from `hunt_results.json` rather than specifying it in prose.
+
+- `report_spec.py` is the single source of truth: nine ordered sections, each marked `server`
+  or `model`. Sections 1-8 keep the numbering the Filter already used so existing OpenWebUI
+  users see no change; provenance is added as section 9.
+- `report_markdown.py` renders sections 2 (MITRE ATT&CK), 3 (Timeline), 4 (IOCs),
+  5 (Accounts and Systems) and 9 (Evidence & Provenance) in pure Python, and emits marked slots
+  for the four genuinely narrative sections.
+- `report_validate.py` checks a finished report mechanically — structure, unfilled slots,
+  citation coverage, UTC timestamps, and whether every cited `hit_id` resolves.
+- Three tools expose this to every client: `get_report_spec` (stateless, so OpenWebUI clients
+  can fetch it at prompt-build time), `build_incident_report`, and `validate_report`. An
+  `@mcp.prompt()` serves the same spec to clients that support prompts; mcpo exposes tools only,
+  which is why the tool is the primary surface.
+
+**Rationale:**
+- Five of nine sections become byte-identical across providers because no model writes them.
+  This is a stronger guarantee than any prompt, and it holds for a model that ignores
+  instructions entirely.
+- It reduces what a weak local model must do from "invent and populate a document" to "write
+  four prose sections", which is the part it can actually do.
+- MITRE mapping stops being a hallucination surface. 14,549 of the 23,306 hits in the reference
+  dataset carry Sigma `tags` (48 distinct `attack.*` values), so technique IDs are extracted from
+  the rules that actually fired. Technique *names* are deliberately **not** emitted — they are
+  absent from the data, and the contributing rule names are given instead so each mapping is
+  auditable back to its rule.
+- Validation is deterministic, so the completion gate does not depend on the model's own
+  judgement about whether it followed the format.
+
+**This does not overturn Decision 14.** That decision rejected *automatic report generation* on
+the grounds that a one-shot report cannot answer follow-up questions. The interactive drill-down
+loop is unchanged; `build_incident_report` standardises the container, not the analysis, and the
+server still makes zero LLM calls.
+
+**IOC extraction sweeps encoded payloads.** In the reference dataset the Cobalt Strike C2 address
+`206.189.69.35` and the SMB beacon pipe `\\.\pipe\diagsvc-22` appear *only* inside base64-encoded
+PowerShell shellcode — they are in no plaintext EventData field. The FINDEVIL report recovered
+them because Claude decoded the payloads by hand, which is not a step a small local model can be
+relied on to take. `build_iocs` therefore base64-decodes long runs in free-text fields (latin-1
+and UTF-16LE) and sweeps the decoded content, marking such indicators `decoded` so the report is
+explicit about how they were derived. Two extraction details follow from sweeping binary: the IPv4
+pattern is bounded with lookarounds rather than `\b` (shellcode routinely places an indicator next
+to a byte that is a word character, where `\b` silently fails to match), and addresses whose last
+three octets are zero are discarded, because `HostVersion=1.0.0.0` shares IPv4's shape.
+
+**Identity grouping is case-insensitive and no more than that.** `SHIELDBASE\spsql` and
+`shieldbase\spsql` are one principal; `shieldbase\spsql` and `shieldbase.lan\spsql` are kept as
+separate rows, because treating a NetBIOS name and a DNS name as the same identity is an
+inference rather than an observation. The observed spellings are listed so the analyst can make
+that call.
+
+### Consequences
+
+- `chainsaw_filter.py` and `chainsaw_pipe.py` no longer embed report structure; both fetch it
+  over mcpo at run time. The docstring rationale for duplicating the `_call`/`_extract_result`
+  helpers still stands — that is about single-file installs — but there is no longer a report
+  template to keep in sync in three places.
+- `SKILL.md` gains Step 6 (build) and Step 7 (validate), and `<promise>CHAINSAW_HUNT_COMPLETE</promise>`
+  is now gated on validation passing, with the same 3-attempt cap as the error-handling loop.
+- `hunt_report.txt` and the fixed-width text formatters are unchanged; the Markdown report is a
+  new artifact alongside them.
+- A report can now fail validation. That is the point, but it means a model that cannot produce
+  a citation for a claim will stall rather than quietly emit an unsupported one — the analyst is
+  told which violations remain after three attempts.
+
+### Addendum: path containment (CodeQL `py/path-injection`, PR #61)
+
+Code scanning flagged seven `Uncontrolled data used in path expression` alerts against
+this change. They were not equally real, and the split is worth recording:
+
+- **`validate_report(path)` — genuinely new.** This was the first tool in the server that
+  read a caller-specified arbitrary file *and reflected fragments of it back*:
+  `_check_timestamps` echoes matched timestamps verbatim and `unresolved` echoes every
+  `ref=`-shaped token found. That matters more here than in an ordinary local tool,
+  because ChainsawMCP deliberately feeds adversary-authored text — command lines and
+  script blocks recovered from a compromised host — to an LLM that can call these tools.
+  A path argument is reachable by prompt injection, not only by the analyst.
+- **`read_provenance(job_id)` — a new sink on pre-existing taint.** `_job_dir()` is
+  byte-identical on `main`, where `read_job`, `results_path`, `log_path` and
+  `load_job_results` already built paths from an unvalidated `job_id`. CodeQL did not
+  flag those only because they are in the base.
+- **The three `write_incident_report` alerts — pattern parity.** Structurally identical
+  to the pre-existing, unflagged `write_full_report`, with `output_dir` coming from
+  `get_output_dir()` (operator configuration via env var, not client input).
+
+**First attempt (rejected):** a shared `ensure_within()` helper doing `resolve()` +
+`is_relative_to()`. It blocked every traversal — verified end-to-end — but CodeQL treats
+`Path.resolve()` as a path-expression sink, does not recognise `is_relative_to()` as a
+sanitizing barrier, and does not propagate a guard across a function boundary. The alert
+count went from 7 to 11: every `.resolve()` added while fixing became a new sink, and the
+helper itself was reported. That is worth recording because the instinct to reach for a
+containment helper is a natural one here.
+
+**Decision:** do not let a value that arrived over MCP reach a path join at all. Match it
+against the on-disk listing and build the path from the matching entry, so the caller's
+string is only ever *compared*.
+
+- `jobs._job_dir()` iterates the jobs root and returns the entry whose name equals the
+  requested `job_id`. This covers `read_job`, `results_path`, `log_path`,
+  `provenance_path` and `load_job_results` in one place, and is strictly stronger than
+  containment: an id must name a job that actually exists. `create_job` uses a separate
+  `_new_job_dir()` because the id it passes is a `uuid4()` it just generated and the
+  directory does not exist yet. `load_hunt_results` also now goes through `log_path()`
+  rather than re-joining `job_id` by hand — a sink CodeQL never flagged.
+- `validate_report` takes the basename of the requested path and looks it up in the
+  reports directory listing, reading only a file the server itself wrote. The lookup
+  happens before any `exists()` call, so the tool is not a file-existence oracle either.
+- `write_incident_report` writes two fixed filenames under `get_output_dir()`. No value
+  from MCP participates in either path; `output_dir` is operator configuration
+  (`CHAINSAW_OUTPUT_DIR` / `CHAINSAWMCP_CASE_DIR` / cwd), the same shape as an
+  `--output-dir` flag. The alerts against it are false positives and the code is left in
+  its original form rather than contorted to satisfy the scanner.
+
+`read_provenance()` returns `None` rather than raising for an unknown id: it is only ever
+called with `state.job_id`, and "no provenance for this job" is its documented contract.

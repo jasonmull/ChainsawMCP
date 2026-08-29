@@ -2,7 +2,7 @@
 
 import asyncio
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -17,12 +17,17 @@ from .jobs import (
     get_latest_completed_job,
     is_pid_alive,
     load_job_results,
+    log_path,
     read_job,
+    read_provenance,
     results_path,
     update_job,
 )
-from .report import format_summary, format_summary_json, get_detections_json, write_full_report
+from .report import format_summary, format_summary_json, get_detections_json, resolve_hit_ids, write_full_report
 from .report import get_detections as _filter_detections
+from .report_markdown import write_incident_report
+from .report_spec import MODEL_SECTIONS, render_spec_text
+from .report_validate import validate_report_text
 from .setup import DEFAULT_CHAINSAW_DIR, DEFAULT_SIGMA_DIR, check_environment, setup_environment as _run_setup
 
 mcp = MCPServer("ChainsawMCP")
@@ -36,6 +41,7 @@ class _SessionState:
     output_file: str = ""
     report_file: str = ""
     evidence_path: str = ""
+    incident_report_file: str = ""
     hunt_status: str = "idle"   # idle | running | done | error
     hunt_started_at: float | None = None
     hunt_finished_at: float | None = None
@@ -373,7 +379,13 @@ async def load_hunt_results(job_id: str = "") -> str:
                 )
             raise ValueError("No completed hunt results found. Run start_hunt to begin a hunt.")
 
-    job = read_job(job_id)
+    try:
+        job = read_job(job_id)
+    except ValueError as exc:
+        # job_id came from the client. _job_dir resolves it against the on-disk
+        # listing, so this covers both a traversal attempt and a job that is simply
+        # not there — neither reaches the filesystem as a path.
+        raise ValueError(str(exc)) from exc
     if job is None:
         raise ValueError(f"Job '{job_id}' not found in {get_jobs_dir()}.")
 
@@ -388,7 +400,7 @@ async def load_hunt_results(job_id: str = "") -> str:
     elif status == "error":
         import json as _json
         stderr_snippet = ""
-        lpath = get_jobs_dir() / job_id / "chainsaw_stderr.log"
+        lpath = log_path(job_id)
         if lpath.exists():
             try:
                 stderr_snippet = lpath.read_text(encoding="utf-8", errors="replace").strip()[-500:]
@@ -436,25 +448,20 @@ async def load_hunt_results(job_id: str = "") -> str:
     # This is the chain-of-custody anchor: proof that hits came from Chainsaw,
     # not from AI inference.
     provenance_lines = ""
-    prov_path = rpath.parent / "chainsaw_provenance.json"
-    if prov_path.exists():
-        try:
-            import json as _json
-            prov = _json.loads(prov_path.read_text(encoding="utf-8"))
-            provenance_lines = (
-                "\nProvenance (chain of custody):\n"
-                f"  Command  : {' '.join(prov.get('command', []))}\n"
-                f"  Output   : {prov.get('output_file')}\n"
-                f"  SHA-256  : {prov.get('output_sha256')}\n"
+    prov = read_provenance(job_id)
+    if prov:
+        provenance_lines = (
+            "\nProvenance (chain of custody):\n"
+            f"  Command  : {' '.join(prov.get('command', []))}\n"
+            f"  Output   : {prov.get('output_file')}\n"
+            f"  SHA-256  : {prov.get('output_sha256')}\n"
+        )
+        if prov.get("raw_output_sha256"):
+            provenance_lines += (
+                f"  Raw out  : {prov.get('raw_output_file')}\n"
+                f"  Raw SHA  : {prov.get('raw_output_sha256')}  (pristine Chainsaw output)\n"
             )
-            if prov.get("raw_output_sha256"):
-                provenance_lines += (
-                    f"  Raw out  : {prov.get('raw_output_file')}\n"
-                    f"  Raw SHA  : {prov.get('raw_output_sha256')}  (pristine Chainsaw output)\n"
-                )
-            provenance_lines += f"  Chainsaw : {prov.get('chainsaw_version')}\n"
-        except Exception:
-            pass
+        provenance_lines += f"  Chainsaw : {prov.get('chainsaw_version')}\n"
 
     staging_errors = job.get("staging_errors") or []
     staging_warn = ""
@@ -580,34 +587,150 @@ async def get_hit(hit_ids: list[str]) -> str:
             f"Too many hit_ids ({len(requested)}); resolve at most {max_ids} per call."
         )
 
-    index = {
-        h.get("hit_id"): h
-        for h in state.hits
-        if isinstance(h, dict) and h.get("hit_id")
-    }
-    resolved: list[dict] = []
-    unresolved: list[str] = []
-    for rid in requested:
-        hit = index.get(rid)
-        (resolved.append(hit) if hit is not None else unresolved.append(rid))
+    resolved, unresolved = resolve_hit_ids(state.hits, requested)
 
     # Provenance anchor: proves the resolved records belong to the hash-verified output.
-    output_sha256 = None
-    if state.job_id:
-        prov_path = results_path(state.job_id).parent / "chainsaw_provenance.json"
-        if prov_path.exists():
-            try:
-                output_sha256 = _json.loads(
-                    prov_path.read_text(encoding="utf-8")
-                ).get("output_sha256")
-            except Exception:
-                pass
+    provenance = read_provenance(state.job_id)
+    output_sha256 = provenance.get("output_sha256") if provenance else None
 
     return _json.dumps(
         {"resolved": resolved, "unresolved": unresolved, "output_sha256": output_sha256},
         indent=2,
         default=str,
     )
+
+
+@mcp.tool()
+@audited
+async def get_report_spec() -> str:
+    """Return the canonical incident report specification.
+
+    This is the single source of truth for report structure, shared by every client so
+    the report has the same shape regardless of which model or inference provider does
+    the analysis. It lists all nine sections in order, marks which ones ChainsawMCP
+    renders deterministically, and gives per-section instructions for the rest.
+
+    Stateless — safe to call before a hunt has run, so clients can build their prompt
+    up front.
+    """
+    return render_spec_text()
+
+
+@mcp.tool()
+@audited
+async def build_incident_report(
+    min_severity: str = "high",
+    timeline_max_rows: int = 200,
+) -> str:
+    """Build the incident report skeleton with all server-rendered sections filled in.
+
+    Writes reports/incident_report.md and reports/incident_report.json. The MITRE ATT&CK
+    mapping, timeline, IOCs, accounts/systems inventory, and provenance block are
+    rendered in Python from the hash-verified hunt output — do not rewrite them. Write
+    the Executive Summary, Attack Narrative, Recommendations, and Gaps sections into the
+    marked slots in the .md file, then call validate_report.
+
+    min_severity: severity floor for the timeline ('critical', 'high', 'medium', 'low',
+    'info'). Defaults to 'high' — a real hunt is dominated by info-level hits.
+    timeline_max_rows: cap on timeline rows; the remainder stay reachable via
+    get_detections.
+    """
+    if state.hunt_status == "running":
+        raise ValueError("Hunt is still running. Call hunt_status to check progress.")
+
+    if state.hunt_status != "done":
+        raise ValueError("No completed hunt results. Call load_hunt_results first.")
+
+    md_path, json_path = write_incident_report(
+        state.hits,
+        output_dir=get_output_dir(),
+        job_id=state.job_id,
+        evidence_path=state.evidence_path,
+        min_severity=min_severity,
+        timeline_max_rows=timeline_max_rows,
+    )
+    state.incident_report_file = str(md_path)
+
+    slots = "\n".join(
+        f"  {s.number}. {s.title} — {s.instruction}" for s in MODEL_SECTIONS
+    )
+    return (
+        "Incident report skeleton written.\n\n"
+        f"  Markdown : {md_path}\n"
+        f"  JSON     : {json_path}\n\n"
+        "Sections 2, 3, 4, 5, and 9 are already rendered from the hunt output. Do not "
+        "rewrite, reorder, or summarise them.\n\n"
+        "Write these sections into their slots in the Markdown file, replacing the "
+        "placeholder line between each <!-- CHAINSAWMCP:BEGIN --> / <!-- CHAINSAWMCP:END --> "
+        "pair:\n\n"
+        f"{slots}\n\n"
+        "Cite every factual claim as ref=<hit_id>. Use UTC ISO-8601 timestamps ending in Z.\n"
+        "When finished, call validate_report() and fix anything it reports."
+    )
+
+
+@mcp.tool()
+@audited
+async def validate_report(path: str = "") -> str:
+    """Check an incident report against the canonical spec and the hunt output.
+
+    Verifies that every required section is present and in order, that no slot was left
+    unfilled, that each model-authored section carries at least one citation, that all
+    timestamps are UTC ISO-8601, and that every cited hit_id resolves to a real
+    detection in the hash-verified hunt output. A hit_id that does not resolve is an
+    unsupported claim.
+
+    Returns JSON with 'pass' and a list of specific violations to correct. Fix the
+    violations and call this again — the report is not complete until it passes.
+
+    path: report to check. Defaults to reports/incident_report.md in the case directory.
+    """
+    import json as _json
+
+    if state.hunt_status != "done":
+        raise ValueError("No completed hunt results. Call load_hunt_results first.")
+
+    # path arrives from the client, and this tool reflects fragments of what it reads
+    # (offending timestamps, unresolved hit_ids) back in its result — so an unconstrained
+    # read here would be an arbitrary-file-disclosure primitive reachable by prompt
+    # injection from event log content. The only legitimate target is a report the server
+    # itself wrote, so the requested name is matched against the reports directory
+    # listing and the path is taken from the matching entry. The caller's string is only
+    # ever compared, never joined onto a path.
+    output_dir = get_output_dir()
+    requested = (path or "incident_report.md").strip()
+    wanted = PurePosixPath(requested.replace("\\", "/")).name
+
+    report_path = None
+    if wanted and output_dir.is_dir():
+        for entry in output_dir.iterdir():
+            if entry.is_file() and entry.name == wanted:
+                report_path = entry
+                break
+
+    if report_path is None:
+        raise ValueError(
+            f"No report named '{wanted or requested}' in the reports directory "
+            f"({output_dir}). validate_report only reads reports the server wrote — "
+            "call build_incident_report first."
+        )
+
+    result = validate_report_text(
+        report_path.read_text(encoding="utf-8"), state.hits
+    )
+    result["report_file"] = str(report_path)
+    return _json.dumps(result, indent=2, default=str)
+
+
+@mcp.prompt()
+def incident_report_format() -> str:
+    """The canonical ChainsawMCP incident report format.
+
+    The same specification get_report_spec returns, exposed as an MCP prompt for clients
+    that support prompts. Clients reaching the server through mcpo see tools only, so
+    get_report_spec remains the primary surface.
+    """
+    return render_spec_text()
 
 
 @mcp.tool()

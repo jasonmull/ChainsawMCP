@@ -20,6 +20,16 @@ injected findings and a structured report prompt.  This means base/completion
 models (e.g. FoundationSec) that cannot call tools directly can still produce
 a full IR report — all tool orchestration happens here.
 
+Report format
+-------------
+The report structure is NOT defined in this file.  It is fetched at run time
+from the MCP server (get_report_spec / build_incident_report), which is the
+single source of truth shared with chainsaw_pipe.py and the Claude Code skill.
+The server pre-renders the MITRE mapping, timeline, IOCs, accounts/systems
+inventory, and provenance deterministically, so a small local model only has
+to write the four narrative sections — and the report it produces has the same
+shape as one written by a hosted model.
+
 Valves (config)
 ---------------
 mcpo_url         : base URL of the mcpo instance wrapping ChainsawMCP
@@ -354,6 +364,22 @@ class Filter:
                     f"## Medium Detections\n\n[Fetch failed: {result}]"
                 )
 
+        # 7. build_incident_report + get_report_spec — the report contract.
+        #    The structure is NOT defined here: it is fetched from the MCP server so
+        #    this Filter, the Pipe, and Claude Code all produce the same report. The
+        #    server has already filled in the MITRE mapping, timeline, IOCs,
+        #    accounts/systems inventory, and provenance deterministically; the local
+        #    model only writes the four narrative sections.
+        report_spec = ""
+        if not fatal:
+            ok, result = _call(f"{base}/build_incident_report", {}, timeout=180)
+            if ok:
+                sections.append(f"## Incident Report Skeleton\n\n{result}")
+
+            ok, result = _call(f"{base}/get_report_spec", {}, timeout=60)
+            if ok:
+                report_spec = result
+
         # ------------------------------------------------------------------
         # Build the injected content
         # ------------------------------------------------------------------
@@ -403,48 +429,23 @@ class Filter:
 
                 ---
 
+                {report_spec}
+
+                ---
+
                 # Analyst Report Instructions
 
-                Using ALL of the findings above, write a complete Incident Response
-                report.  The report must be written in full — do not summarise or
-                defer sections.  Structure it as follows:
+                Using ALL of the findings above, complete the incident report.
 
-                ## 1. Executive Summary
-                One paragraph suitable for non-technical stakeholders.  State
-                what happened, when, and the likely impact.
+                Sections 2, 3, 4, 5, and 9 are already written by ChainsawMCP from
+                the hash-verified hunt output — reproduce them verbatim from the
+                skeleton above.  Do not rewrite, reorder, or summarise them.
 
-                ## 2. MITRE ATT&CK Mapping
-                For every detection, map it to the most specific ATT&CK
-                technique and sub-technique (e.g. T1059.001 — PowerShell).
-                Present as a table: Technique ID | Technique Name | Detection |
-                Severity.
-
-                ## 3. Timeline of Events
-                Reconstruct the attack timeline in chronological order from the
-                event log timestamps present in the findings.  Format as a
-                markdown table: Timestamp | Event | Rule | Severity.
-
-                ## 4. Indicators of Compromise (IOCs)
-                Extract all IOCs: hashes, IPs, domains, file paths, registry
-                keys, process names, command lines.  Group by type.
-
-                ## 5. Compromised Accounts and Systems
-                List every account and hostname that appears in the detections,
-                noting the role (e.g. domain admin, service account, workstation).
-
-                ## 6. Attack Narrative
-                Describe the full attack chain in plain English: initial access
-                → execution → persistence → privilege escalation → lateral
-                movement → collection → exfiltration/impact.  Cite specific
-                detections by rule name where possible.
-
-                ## 7. Recommendations
-                Prioritised remediation steps — immediate containment first,
-                then hardening, then monitoring.
-
-                ## 8. Gaps and Limitations
-                Note any log gaps, missing data sources, or caveats that
-                affect confidence in the findings.
+                Write sections 1, 6, 7, and 8 yourself, replacing the placeholder
+                line inside each CHAINSAWMCP:BEGIN / CHAINSAWMCP:END pair.  Cite
+                every factual claim as ref=<hit_id> using the IDs shown in the
+                findings.  Use UTC ISO-8601 timestamps ending in Z.  Output the
+                complete report — do not defer or summarise any section.
 
                 Begin the report now:
             """)

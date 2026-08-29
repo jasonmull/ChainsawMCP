@@ -40,6 +40,20 @@ All file paths and subprocess calls must handle both Windows and Linux.
 1. `prepare_evidence` — mount E01 or validate EVTX directory, stage files for Chainsaw
 2. `chainsaw_hunt` — run hunt against staged EVTXs, return parsed hits for client analysis
 3. `chainsaw_report` — format hits into a structured analyst report
+4. `get_report_spec` — return the canonical incident report specification (stateless)
+5. `build_incident_report` — write `reports/incident_report.md` + `.json` with all
+   server-rendered sections pre-filled and slots for the narrative ones
+6. `validate_report` — check a finished report against the spec and resolve every cited `hit_id`
+
+### Report format is server-owned
+The incident report structure lives in `report_spec.py` and is served to every client, so it
+does not vary with the inference provider. Sections 2 (MITRE ATT&CK), 3 (Timeline), 4 (IOCs),
+5 (Accounts and Systems) and 9 (Evidence & Provenance) are rendered deterministically in Python
+from the hunt output — never ask a model to write or rewrite them. Only sections 1, 6, 7 and 8
+are model-authored, and they go in the marked slots.
+
+Do not add a report template to a client, a skill, or a prompt. If the format needs to change,
+change `report_spec.py`.
 
 ## Key Design Decisions
 - Chainsaw runs as a subprocess — keep it decoupled, don't reimplement its logic
@@ -47,10 +61,29 @@ All file paths and subprocess calls must handle both Windows and Linux.
 - JSON output from Chainsaw is the interface contract — parse defensively
 - Hits are returned to the client grouped by rule for easy analysis
 
+## Path handling for MCP arguments
+**Never join a value that arrived over MCP onto a filesystem path.** Match it against the
+on-disk listing and build the path from the matching entry, so the caller's string is only
+ever compared. `jobs._job_dir()` and `validate_report` both do this.
+
+This is stronger than a containment check (`resolve()` + `is_relative_to()`), which was
+tried first and rejected: it also requires the target to actually exist, and it leaves no
+tainted value in the path expression at all. A containment helper is additionally invisible
+to CodeQL, which treats `Path.resolve()` as a sink and does not recognise `is_relative_to()`
+as a barrier or propagate a guard across a function boundary — so the helper itself becomes
+the reported sink.
+
+This is not routine defensiveness: the server feeds adversary-authored text — command
+lines and script blocks pulled from a compromised host's event logs — to an LLM that can
+call these tools, so a path argument is reachable by prompt injection, not just by the
+analyst. `prepare_evidence` and `start_hunt` take arbitrary paths by design (they have to
+reach the evidence); everything else should be confined.
+
 ## What NOT to Do
 - Don't hardcode paths or binary names
 - Don't make server-side LLM calls — the client handles reasoning
 - Don't rewrite Chainsaw logic in Python
+- Don't join an MCP-supplied value onto a path — resolve it through the listing instead
 
 ## Project Structure (target)
 ```
@@ -64,7 +97,10 @@ ChainsawMCP/
 │       ├── server.py        # MCP server entry point
 │       ├── evidence.py      # E01 mounting + EVTX staging (prepare_evidence)
 │       ├── chainsaw.py      # Subprocess wrapper for chainsaw hunt
-│       ├── report.py        # Report formatting
+│       ├── report.py        # Report formatting (fixed-width text, hunt_report.txt)
+│       ├── report_spec.py   # Canonical incident report spec — single source of truth
+│       ├── report_markdown.py # Deterministic Markdown rendering of server sections
+│       ├── report_validate.py # Conformance + citation checking for finished reports
 │       └── config.py        # Env/config handling (paths, binary names, etc.)
 └── tests/
     ├── sample_evtx/         # Small test EVTX files
