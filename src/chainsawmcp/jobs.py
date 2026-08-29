@@ -81,6 +81,27 @@ def log_path(job_id: str) -> Path:
     return _job_dir(job_id) / "chainsaw_stderr.log"
 
 
+def provenance_path(job_id: str) -> Path:
+    return _job_dir(job_id) / "chainsaw_provenance.json"
+
+
+def read_provenance(job_id: str) -> dict | None:
+    """Return the chain-of-custody record for *job_id*, or None if unreadable.
+
+    Written by monitor.py alongside hunt_results.json: the exact command, Chainsaw
+    version, binary and output SHA-256, and UTC completion time.
+    """
+    if not job_id:
+        return None
+    pfile = provenance_path(job_id)
+    if not pfile.exists():
+        return None
+    try:
+        return json.loads(pfile.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def get_latest_completed_job() -> str | None:
     jobs_dir = get_jobs_dir()
     if not jobs_dir.exists():

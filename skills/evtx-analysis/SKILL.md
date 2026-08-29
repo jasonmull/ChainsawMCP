@@ -98,17 +98,57 @@ block, EventRecordID, source EVTX) plus the provenance SHA-256.
 - This is the hallucination backstop: detections come only from Chainsaw (the server makes no LLM
   calls), and `get_hit` makes that traceability mechanically verifiable rather than a matter of trust.
 
+### Step 6 — Build the report
+
+```
+call: build_incident_report()
+```
+
+- Writes `reports/incident_report.md` and `reports/incident_report.json`
+- **Do not invent a report structure.** The format is fixed and defined by the server —
+  `get_report_spec()` returns it in full if you need the per-section detail
+- Sections 2 (MITRE ATT&CK), 3 (Timeline), 4 (IOCs), 5 (Accounts and Systems) and
+  9 (Evidence & Provenance) are already rendered from the hash-verified hunt output.
+  **Do not rewrite, reorder, summarise, or "improve" them** — they are byte-identical
+  across models by design, and editing them is what makes reports diverge
+- Write sections 1, 6, 7 and 8 into their slots, replacing the placeholder line between
+  each `<!-- CHAINSAWMCP:BEGIN -->` / `<!-- CHAINSAWMCP:END -->` pair. Leave the markers
+  in place
+- Tune the timeline with `build_incident_report(min_severity="medium")` when the default
+  `high` floor is too narrow for the engagement
+
+The server extracts indicators from base64-encoded payloads as well as plaintext fields,
+so C2 addresses and named pipes hidden inside encoded PowerShell are already in section 4,
+marked `decoded`. Do not decode payloads by hand and add findings the server missed —
+if something is missing, say so in section 8.
+
+### Step 7 — Validate (mandatory before completion)
+
+```
+call: validate_report()
+```
+
+- Checks every required section is present and in order, that no slot was left unfilled,
+  that each section you wrote carries at least one citation, that all timestamps are UTC,
+  and that **every `hit_id` you cited resolves to a real detection**
+- If `pass` is `false`, fix the listed violations and call `validate_report()` again
+- Stop after **3 failed attempts** and report the remaining violations to the analyst
+  rather than looping — the same cap as the error-handling loop below
+
 ---
 
 ## Completion promise
 
-When all required detections have been retrieved and the analyst has their findings, emit:
+When `validate_report()` returns `"pass": true` and the analyst has their findings, emit:
 
 ```
 <promise>CHAINSAW_HUNT_COMPLETE</promise>
 ```
 
-The self-correction loop uses this token to confirm the workflow step completed before moving to the next stage (memory analysis, timeline correlation, IOC extraction, etc.).
+**Do not emit this token while validation is failing.** A report with an unresolved
+citation or an unwritten section is not complete, and the self-correction loop uses this
+token to confirm the workflow step finished before moving to the next stage (memory
+analysis, timeline correlation, IOC extraction, etc.).
 
 ---
 

@@ -1,6 +1,5 @@
 """Format Chainsaw hunt results into analyst reports."""
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -155,6 +154,28 @@ def get_detections_json(
         "total_pages": total_pages,
         "hits": [_hit_to_dict(h) for h in page_hits],
     }
+
+
+def resolve_hit_ids(
+    hits: list[dict[str, Any]], hit_ids: list[str]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Resolve hit_id citations against *hits*.
+
+    Returns (resolved_records, unresolved_ids). An id that does not resolve is, by
+    definition, an unsupported claim — this is the citation backstop shared by the
+    get_hit tool and the report validator.
+    """
+    index = {
+        h.get("hit_id"): h
+        for h in hits
+        if isinstance(h, dict) and h.get("hit_id")
+    }
+    resolved: list[dict[str, Any]] = []
+    unresolved: list[str] = []
+    for hid in hit_ids:
+        hit = index.get(hid)
+        (resolved.append(hit) if hit is not None else unresolved.append(hid))
+    return resolved, unresolved
 
 
 def _hit_to_dict(hit: dict[str, Any]) -> dict[str, Any]:

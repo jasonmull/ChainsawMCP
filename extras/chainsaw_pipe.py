@@ -356,6 +356,7 @@ def _build_analysis_prompt(
     transcript_sections: list[str],
     tool_error: str | None,
     capped: bool,
+    report_spec: str = "",
 ) -> str:
     if tool_error:
         return textwrap.dedent(f"""\
@@ -387,6 +388,9 @@ def _build_analysis_prompt(
         "tool-call rounds for this turn; findings below may be incomplete."
         if capped else ""
     )
+    # The report structure comes from the MCP server, not from this file, so the
+    # Pipe, the Filter, and the Claude Code skill all specify the same report.
+    spec_block = f"\n\n---\n\n{report_spec}" if report_spec else ""
     return textwrap.dedent(f"""\
         <!-- CHAINSAW ANALYSIS: FINDINGS GATHERED BY AUTONOMOUS TOOL-CALLING AGENT -->
         The following Chainsaw findings were gathered by an autonomous
@@ -406,13 +410,14 @@ def _build_analysis_prompt(
 
         # Instructions
 
-        Answer the analyst's question directly using the findings above. If
-        the analyst is asking for a full Incident Response report, structure
-        it with these sections: Executive Summary, MITRE ATT&CK Mapping,
-        Timeline of Events, Indicators of Compromise (IOCs), Compromised
-        Accounts and Systems, Attack Narrative, Recommendations, and Gaps and
-        Limitations. Otherwise, answer only what was asked — do not pad a
-        narrow follow-up question into a full report.
+        Answer the analyst's question directly using the findings above. Cite
+        every factual claim as ref=<hit_id> using the IDs shown in the findings,
+        and use UTC ISO-8601 timestamps ending in Z.
+
+        If the analyst is asking for a full Incident Response report, follow the
+        report specification below exactly. Otherwise, answer only what was asked
+        — do not pad a narrow follow-up question into a full report.
+        {spec_block}
     """)
 
 
@@ -494,7 +499,20 @@ class Pipe:
             if iteration == self.valves.max_tool_iterations - 1:
                 capped = True
 
-        prompt = _build_analysis_prompt(last_user_content, transcript_sections, tool_error, capped)
+        # Fetch the canonical report specification from the MCP server. It is
+        # stateless, so this works whether or not a hunt has run this turn; if the
+        # server is unreachable the prompt simply omits the spec rather than falling
+        # back to a divergent copy embedded here.
+        report_spec = ""
+        ok, spec_text = await asyncio.to_thread(
+            _call, f"{base}/get_report_spec", {}, 60
+        )
+        if ok:
+            report_spec = spec_text
+
+        prompt = _build_analysis_prompt(
+            last_user_content, transcript_sections, tool_error, capped, report_spec
+        )
 
         ok, message = await _ollama_chat(
             ollama, self.valves.analysis_model,

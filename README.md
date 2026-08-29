@@ -218,6 +218,8 @@ Then add `http://localhost:8000/mcp` as an MCP server in OpenWebUI under **Admin
 
 > **Note:** OpenWebUI MCP integration and local LLM tool-calling support are actively evolving. Results may vary depending on model and OpenWebUI version.
 
+**Report format does not vary by model.** The incident report structure is defined once on the server and served to every client, so a hunt analysed by a local Qwen or Foundation-Sec model produces the same report structure as one analysed by Claude. Sections 2 (MITRE ATT&CK), 3 (Timeline), 4 (IOCs), 5 (Accounts and Systems) and 9 (Evidence & Provenance) are rendered deterministically in Python from the hash-verified hunt output and are byte-identical across providers — no model writes them. Only the Executive Summary, Attack Narrative, Recommendations, and Gaps sections are model-authored, and `validate_report` checks the finished document mechanically: every required section present, no unfilled slots, UTC timestamps, and every cited `hit_id` resolving to a real detection. See `docs/ADR-combined.md` Decision 25.
+
 **Using a non-tool-calling model (e.g. Foundation-Sec-8B) for analysis:** if native MCP tool injection doesn't work reliably for your model, see `extras/chainsaw_filter.py` (a one-shot `!analyse <path>` pipeline) and `extras/chainsaw_pipe.py` (an interactive Pipe pairing a tool-calling model like Qwen with a non-tool-calling analysis model) — both run via [mcpo](https://github.com/open-webui/mcpo) instead of native MCP. See `docs/ADR-combined.md` Decisions 8 and 24 for the full design.
 
 ---
@@ -309,7 +311,36 @@ Resolve one or more `hit_id` citations back to their full raw Chainsaw records �
 
 ---
 
-### 7. `setup_environment`
+### 7. `build_incident_report`
+
+Write the incident report skeleton to `<case_dir>/reports/incident_report.md` and a structured sidecar to `incident_report.json`. Sections 2 (MITRE ATT&CK), 3 (Timeline), 4 (IOCs), 5 (Accounts and Systems) and 9 (Evidence & Provenance) are rendered deterministically in Python from the hash-verified hunt output — no model writes them, so they are byte-identical whichever client is connected. The Executive Summary, Attack Narrative, Recommendations, and Gaps sections are left as marked slots for the analysis model to fill in place.
+
+ATT&CK techniques come from the Sigma tags on the rules that actually fired; technique *names* are deliberately not emitted, since they are absent from the hunt output. IOC extraction sweeps base64-encoded payloads as well as plaintext fields — C2 addresses and named pipes hidden inside encoded PowerShell are surfaced and marked `decoded`.
+
+| Argument | Type | Description |
+|---|---|---|
+| `min_severity` | string, optional | Severity floor for the timeline (default: `high`) |
+| `timeline_max_rows` | integer, optional | Cap on timeline rows (default: 200); the remainder stay reachable via `get_detections` |
+
+---
+
+### 8. `validate_report`
+
+Check a finished report against the canonical spec and the hunt output. Verifies every required section is present and in order, no slot was left unfilled, each model-authored section carries at least one citation, all timestamps are UTC ISO-8601, and **every cited `hit_id` resolves to a real detection**. Returns JSON with `pass` and a list of specific violations to correct.
+
+| Argument | Type | Description |
+|---|---|---|
+| `path` | string, optional | Report to check (default: `<case_dir>/reports/incident_report.md`) |
+
+---
+
+### `get_report_spec` _(stateless)_
+
+Return the canonical incident report specification — the single source of truth shared by Claude Code, `chainsaw_filter.py`, and `chainsaw_pipe.py`. Safe to call before a hunt has run, so clients can build their prompt up front. Also exposed as an MCP prompt (`incident_report_format`) for clients that support prompts.
+
+---
+
+### 9. `setup_environment`
 
 Install Chainsaw and Sigma rules. Installs to `/opt/chainsaw/` and `/opt/sigma/` by default — no sudo required if those paths are writable. If they are not, the tool returns the exact shell commands to run manually rather than escalating privileges silently. Resolved paths are saved to `~/.chainsawmcp/config.json` so `start_hunt` picks them up automatically with no explicit path arguments.
 
